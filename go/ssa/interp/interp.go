@@ -648,18 +648,29 @@ func doRecover(caller *frame) value {
 // Type parameterized functions must have been built with
 // InstantiateGenerics in the ssa.BuilderMode to be interpreted.
 func Interpret(mainpkg *ssa.Package, mode Mode, sizes types.Sizes, filename string, args []string) (exitCode int) {
+	return InterpretFunc(mainpkg, "main", mode, sizes, filename, args)
+}
+
+func InterpretFunc(
+	pkg *ssa.Package,
+	funcName string,
+	mode Mode,
+	sizes types.Sizes,
+	filename string,
+	args []string,
+) (exitCode int) {
 	i := &interpreter{
-		prog:       mainpkg.Prog,
+		prog:       pkg.Prog,
 		globals:    make(map[*ssa.Global]*value),
 		mode:       mode,
 		sizes:      sizes,
 		goroutines: 1,
 	}
-	runtimePkg := i.prog.ImportedPackage("runtime")
-	if runtimePkg == nil {
-		panic("ssa.Program doesn't include runtime package")
-	}
-	i.runtimeErrorString = runtimePkg.Type("errorString").Object().Type()
+	//runtimePkg := i.prog.ImportedPackage("runtime")
+	//if runtimePkg == nil {
+	//	panic("ssa.Program doesn't include runtime package")
+	//}
+	//i.runtimeErrorString = runtimePkg.Type("errorString").Object().Type()
 
 	initReflect(i)
 
@@ -707,12 +718,12 @@ func Interpret(mainpkg *ssa.Package, mode Mode, sizes types.Sizes, filename stri
 	}()
 
 	// Run!
-	call(i, nil, token.NoPos, mainpkg.Func("init"), nil)
-	if mainFn := mainpkg.Func("main"); mainFn != nil {
+	call(i, nil, token.NoPos, pkg.Func("init"), nil)
+	if mainFn := pkg.Func(funcName); mainFn != nil {
 		call(i, nil, token.NoPos, mainFn, nil)
 		exitCode = 0
 	} else {
-		fmt.Fprintln(os.Stderr, "No main function.")
+		fmt.Fprintf(os.Stderr, "No '%s' function.\n", funcName)
 		exitCode = 1
 	}
 	return

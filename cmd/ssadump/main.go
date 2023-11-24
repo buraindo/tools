@@ -176,7 +176,8 @@ func doMain() error {
 		// Run first main package.
 		for _, main := range ssautil.MainPackages(pkgs) {
 			fmt.Fprintf(os.Stderr, "Running: %s\n", main.Pkg.Path())
-			os.Exit(interp.Interpret(main, interpMode, sizes, main.Pkg.Path(), args))
+			code := interp.Interpret(main, interpMode, sizes, main.Pkg.Path(), args)
+			os.Exit(code)
 		}
 		return fmt.Errorf("no main package")
 	}
