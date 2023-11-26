@@ -1,37 +1,26 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"go/token"
 	"go/types"
+	"log"
+	"os"
+
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/interp"
 	"golang.org/x/tools/go/ssa/ssautil"
-	"log"
-	"os"
-	"path/filepath"
-	"runtime"
 )
 
-var (
-	_, b, _, _ = runtime.Caller(0)
-	basePath   = filepath.Dir(b)
-)
-
-func dump(mainPackage *ssa.Package) {
-	out := bytes.Buffer{}
-	ssa.WritePackage(&out, mainPackage)
-	for _, object := range mainPackage.Members {
-		if object.Token() == token.FUNC {
-			ssa.WriteFunction(&out, mainPackage.Func(object.Name()))
-		}
+func newInterpreter(fileName string, debug bool) (*interp.Interpreter, error) {
+	f, err := os.Open(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
 	}
-	fmt.Print(out.String())
-}
+	if err = f.Close(); err != nil {
+		return nil, fmt.Errorf("close file: %w", err)
+	}
 
-func interpret(fileName string, debug bool) error {
 	mode := packages.NeedName |
 		packages.NeedFiles |
 		packages.NeedCompiledGoFiles |
@@ -46,16 +35,22 @@ func interpret(fileName string, debug bool) error {
 		packages.NeedEmbedFiles |
 		packages.NeedEmbedPatterns
 	cfg := &packages.Config{Mode: mode}
+	if debug {
+		cfg.Logf = log.Printf
+	}
 	initialPackages, err := packages.Load(cfg, fileName)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
+	}
+	if len(initialPackages) == 0 {
+		return nil, fmt.Errorf("no packages were loaded")
 	}
 
 	if packages.PrintErrors(initialPackages) > 0 {
-		log.Fatalf("packages contain errors")
+		return nil, fmt.Errorf("packages contain errors")
 	}
 
-	program, ssaPackages := ssautil.AllPackages(initialPackages, ssa.InstantiateGenerics|ssa.SanityCheckFunctions)
+	program, _ := ssautil.AllPackages(initialPackages, ssa.InstantiateGenerics|ssa.SanityCheckFunctions)
 	program.Build()
 
 	sizes := &types.StdSizes{
@@ -66,27 +61,19 @@ func interpret(fileName string, debug bool) error {
 	if debug {
 		interpMode |= interp.EnableTracing
 	}
-	for _, mainPackage := range ssautil.MainPackages(ssaPackages) {
-		fmt.Printf("Running: %s\n", mainPackage.Pkg.Name())
-		if !debug {
-			dump(mainPackage)
-		}
-		code := interp.InterpretFunc(mainPackage, "main", interpMode, sizes, mainPackage.Pkg.Path(), nil)
-		os.Exit(code)
-	}
-	return fmt.Errorf("no main package")
+
+	return interp.NewInterpreter(program, interpMode, sizes, fileName, nil), nil
 }
 
-func main() {
-	fatal(interpret(path("../testdata/buraindo/max2.go"), false))
-}
-
-func fatal(err error) {
+func interpret(fileName string, debug bool) {
+	i, err := newInterpreter(fileName, debug)
 	if err != nil {
 		log.Fatal(err)
 	}
+	code := i.Interpret(debug)
+	os.Exit(code)
 }
 
-func path(p string) string {
-	return filepath.Join(basePath, p)
+func main() {
+	interpret("/home/buraindo/programs/max2.go", false)
 }
