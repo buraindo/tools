@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"go/token"
 	"go/types"
 	"log"
 	"os"
@@ -12,7 +14,13 @@ import (
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
-func newInterpreter(fileName string, debug bool) (*interp.Interpreter, error) {
+type config struct {
+	debugLog      bool
+	enableTracing bool
+	dumpSsa       bool
+}
+
+func newInterpreter(fileName string, conf config) (*interp.Interpreter, error) {
 	f, err := os.Open(fileName)
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
@@ -35,7 +43,7 @@ func newInterpreter(fileName string, debug bool) (*interp.Interpreter, error) {
 		packages.NeedEmbedFiles |
 		packages.NeedEmbedPatterns
 	cfg := &packages.Config{Mode: mode}
-	if debug {
+	if conf.enableTracing {
 		cfg.Logf = log.Printf
 	}
 	initialPackages, err := packages.Load(cfg, fileName)
@@ -58,22 +66,42 @@ func newInterpreter(fileName string, debug bool) (*interp.Interpreter, error) {
 		WordSize: 8,
 	}
 	var interpMode interp.Mode
-	if debug {
+	if conf.enableTracing {
 		interpMode |= interp.EnableTracing
 	}
 
-	return interp.NewInterpreter(program, interpMode, sizes, fileName, nil), nil
-}
-
-func interpret(fileName string, debug bool) {
-	i, err := newInterpreter(fileName, debug)
-	if err != nil {
-		log.Fatal(err)
+	mainPackages := ssautil.MainPackages(program.AllPackages())
+	if len(mainPackages) == 0 {
+		return nil, fmt.Errorf("error: 0 packages")
 	}
-	code := i.Interpret(debug)
-	os.Exit(code)
+	mainPackage := mainPackages[0]
+	if conf.dumpSsa {
+		dump(mainPackage)
+	}
+
+	return interp.NewInterpreter(program, mainPackage, interpMode, sizes, fileName, nil), nil
 }
 
-func main() {
-	interpret("/home/buraindo/programs/max2.go", false)
+//func main() {
+//	i, err := newInterpreter("/home/buraindo/programs/max2.go", config{
+//		debugLog:      false,
+//		enableTracing: false,
+//		dumpSsa:       true,
+//	})
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	code := i.Interpret()
+//	os.Exit(code)
+//}
+
+func dump(mainPackage *ssa.Package) {
+	out := bytes.Buffer{}
+	ssa.WritePackage(&out, mainPackage)
+	for _, object := range mainPackage.Members {
+		if object.Token() == token.FUNC {
+			ssa.WriteFunction(&out, mainPackage.Func(object.Name()))
+		}
+	}
+	fmt.Print(out.String())
 }

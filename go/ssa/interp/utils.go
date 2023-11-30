@@ -1,23 +1,23 @@
 package interp
 
 import (
-	"bytes"
 	"fmt"
 	"go/token"
 	"go/types"
 	"runtime"
 
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 type Interpreter struct {
 	*interpreter
-	filename string
+	filename    string
+	mainPackage *ssa.Package
 }
 
 func NewInterpreter(
 	program *ssa.Program,
+	mainPackage *ssa.Package,
 	mode Mode,
 	sizes types.Sizes,
 	filename string,
@@ -47,21 +47,15 @@ func NewInterpreter(
 		}
 	}
 
-	return &Interpreter{interpreter: i, filename: filename}
+	return &Interpreter{
+		interpreter: i,
+		filename:    filename,
+		mainPackage: mainPackage,
+	}
 }
 
-func (i *Interpreter) Interpret(debug bool) int {
-	packages := ssautil.MainPackages(i.prog.AllPackages())
-	if len(packages) == 0 {
-		fmt.Println("error: 0 packages")
-		return 1
-	}
-	mainPackage := packages[0]
-	fmt.Printf("Running: %s\n", mainPackage.Pkg.Name())
-	if !debug {
-		dump(mainPackage)
-	}
-
+func (i *Interpreter) Interpret() int {
+	fmt.Printf("Running: %s\n", i.mainPackage.Pkg.Name())
 	exitCode := 2
 	defer func() {
 		if exitCode != 2 || i.mode&DisableRecover != 0 {
@@ -89,8 +83,8 @@ func (i *Interpreter) Interpret(debug bool) int {
 	}()
 
 	// Run!
-	call(i.interpreter, nil, token.NoPos, mainPackage.Func("init"), nil)
-	if mainFn := mainPackage.Func("main"); mainFn != nil {
+	call(i.interpreter, nil, token.NoPos, i.Init(), nil)
+	if mainFn := i.Main(); mainFn != nil {
 		call(i.interpreter, nil, token.NoPos, mainFn, nil)
 		exitCode = 0
 	} else {
@@ -107,13 +101,14 @@ func (i *Interpreter) Filename() string {
 	return i.filename
 }
 
-func dump(mainPackage *ssa.Package) {
-	out := bytes.Buffer{}
-	ssa.WritePackage(&out, mainPackage)
-	for _, object := range mainPackage.Members {
-		if object.Token() == token.FUNC {
-			ssa.WriteFunction(&out, mainPackage.Func(object.Name()))
-		}
-	}
-	fmt.Print(out.String())
+func (i *Interpreter) Program() *ssa.Program {
+	return i.prog
+}
+
+func (i *Interpreter) Init() *ssa.Function {
+	return i.mainPackage.Func("init")
+}
+
+func (i *Interpreter) Main() *ssa.Function {
+	return i.mainPackage.Func("main")
 }
