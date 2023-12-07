@@ -19,17 +19,19 @@ type Interpreter struct {
 
 type Api interface {
 	MkIntRegisterReading(name string, idx int)
+	MkIntSignedLessExpr(fst, snd string)
 	MkIntSignedGreaterExpr(fst, snd string)
-	MkIfInst(expr string, pos, neg ssa.Instruction)
+	MkIfInst(expr string, pos, neg *ssa.Instruction)
 	MkReturnInst(name string)
 }
 
 type discardApi struct{}
 
-func (discardApi) MkIntRegisterReading(string, int)                  {}
-func (discardApi) MkIntSignedGreaterExpr(string, string)             {}
-func (discardApi) MkIfInst(string, ssa.Instruction, ssa.Instruction) {}
-func (discardApi) MkReturnInst(string)                               {}
+func (discardApi) MkIntRegisterReading(string, int)                    {}
+func (discardApi) MkIntSignedLessExpr(string, string)                  {}
+func (discardApi) MkIntSignedGreaterExpr(string, string)               {}
+func (discardApi) MkIfInst(string, *ssa.Instruction, *ssa.Instruction) {}
+func (discardApi) MkReturnInst(string)                                 {}
 
 func NewInterpreter(
 	program *ssa.Program,
@@ -155,7 +157,7 @@ func (i *Interpreter) FrameStep(api Api) bool {
 	return len(i.framesStack) == 0
 }
 
-func (i *Interpreter) Step(api Api, inst ssa.Instruction) ssa.Instruction {
+func (i *Interpreter) Step(api Api, inst ssa.Instruction) *ssa.Instruction {
 	return i.step(api, inst)
 }
 
@@ -203,7 +205,7 @@ func (i *Interpreter) frameStep(fr *frame) {
 	}
 }
 
-func (i *Interpreter) step(api Api, inst ssa.Instruction) ssa.Instruction {
+func (i *Interpreter) step(api Api, inst ssa.Instruction) *ssa.Instruction {
 	block := inst.Block()
 	switch visitInstr(api, inst) {
 	case kNext:
@@ -212,10 +214,10 @@ func (i *Interpreter) step(api Api, inst ssa.Instruction) ssa.Instruction {
 				continue
 			}
 			if j+1 < len(block.Instrs) {
-				return block.Instrs[j+1]
+				return &block.Instrs[j+1]
 			}
 			if len(block.Succs) > 0 && len(block.Succs[0].Instrs) > 0 {
-				return block.Succs[0].Instrs[0]
+				return &block.Succs[0].Instrs[0]
 			}
 		}
 		return nil

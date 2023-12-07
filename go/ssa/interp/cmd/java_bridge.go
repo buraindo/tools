@@ -50,8 +50,8 @@ static void callMkIntRegisterReading(mkIntRegisterReading f, char* name, int idx
 	f(name, idx);
 }
 
-typedef void (*mkIntSignedGreaterExpr)(char*, char*);
-static void callMkIntSignedGreaterExpr(mkIntSignedGreaterExpr f, char* fst, char* snd) {
+typedef void (*mkIntSignedExpr)(char*, char*);
+static void callMkIntSignedExpr(mkIntSignedExpr f, char* fst, char* snd) {
 	f(fst, snd);
 }
 
@@ -67,7 +67,8 @@ static void callMkReturnInst(mkReturnInst f, char* name) {
 
 struct Api {
 	mkIntRegisterReading mkIntRegisterReading;
-	mkIntSignedGreaterExpr mkIntSignedGreaterExpr;
+	mkIntSignedExpr mkIntSignedLessExpr;
+	mkIntSignedExpr mkIntSignedGreaterExpr;
 	mkIfInst mkIfInst;
 	mkReturnInst mkReturnInst;
 };
@@ -559,12 +560,16 @@ func (a *Api) MkIntRegisterReading(name string, idx int) {
 	C.callMkIntRegisterReading(a.api.mkIntRegisterReading, C.CString(name), C.int(idx))
 }
 
-func (a *Api) MkIntSignedGreaterExpr(fst, snd string) {
-	C.callMkIntSignedGreaterExpr(a.api.mkIntSignedGreaterExpr, C.CString(fst), C.CString(snd))
+func (a *Api) MkIntSignedLessExpr(fst, snd string) {
+	C.callMkIntSignedExpr(a.api.mkIntSignedLessExpr, C.CString(fst), C.CString(snd))
 }
 
-func (a *Api) MkIfInst(expr string, pos, neg ssa.Instruction) {
-	C.callMkIfInst(a.api.mkIfInst, C.CString(expr), toCInstruction(&pos), toCInstruction(&neg))
+func (a *Api) MkIntSignedGreaterExpr(fst, snd string) {
+	C.callMkIntSignedExpr(a.api.mkIntSignedGreaterExpr, C.CString(fst), C.CString(snd))
+}
+
+func (a *Api) MkIfInst(expr string, pos, neg *ssa.Instruction) {
+	C.callMkIfInst(a.api.mkIfInst, C.CString(expr), toCInstruction(pos), toCInstruction(neg))
 }
 
 func (a *Api) MkReturnInst(name string) {
@@ -586,7 +591,7 @@ func step(javaApi C.struct_Api, pointer uintptr) C.struct_Instruction {
 			statement: C.CString("nil"),
 		}
 	}
-	return toCInstruction(&out)
+	return toCInstruction(out)
 }
 
 // ---------------- region: api

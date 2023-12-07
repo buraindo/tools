@@ -200,66 +200,40 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		// no-op
 
 	case *ssa.UnOp:
-		log.Println("UnOp")
-
 		fr.env[instr] = unop(instr, fr.get(instr.X))
 
 	case *ssa.BinOp:
-		log.Println("BinOp", instr.X.Name(), instr.Op.String(), instr.Y.Name())
-
-		fr.api.MkIntSignedGreaterExpr(instr.X.Name(), instr.Y.Name())
-
 		fr.env[instr] = binop(instr.Op, instr.X.Type(), fr.get(instr.X), fr.get(instr.Y))
 
 	case *ssa.Call:
-		log.Println("Call")
-
 		fn, args := prepareCall(fr, &instr.Call)
 		call(fr.i, fr, instr, fn, args)
 
 	case *ssa.ChangeInterface:
-		log.Println("ChangeInterface")
-
 		fr.env[instr] = fr.get(instr.X)
 
 	case *ssa.ChangeType:
-		log.Println("ChangeType")
-
 		fr.env[instr] = fr.get(instr.X) // (can't fail)
 
 	case *ssa.Convert:
-		log.Println("Convert")
-
 		fr.env[instr] = conv(instr.Type(), instr.X.Type(), fr.get(instr.X))
 
 	case *ssa.SliceToArrayPointer:
-		log.Println("SliceToArrayPointer")
-
 		fr.env[instr] = sliceToArrayPointer(instr.Type(), instr.X.Type(), fr.get(instr.X))
 
 	case *ssa.MakeInterface:
-		log.Println("MakeInterface")
-
 		fr.env[instr] = iface{t: instr.X.Type(), v: fr.get(instr.X)}
 
 	case *ssa.Extract:
-		log.Println("Extract")
-
 		fr.env[instr] = fr.get(instr.Tuple).(tuple)[instr.Index]
 
 	case *ssa.Slice:
-		log.Println("Slice")
-
 		fr.env[instr] = slice(fr.get(instr.X), fr.get(instr.Low), fr.get(instr.High), fr.get(instr.Max))
 
 	case *ssa.Return:
-		log.Println("Return", instr.Parent(), instr.Results)
-
 		switch len(instr.Results) {
 		case 0:
 		case 1:
-			fr.api.MkReturnInst(instr.Results[0].Name())
-
 			fr.result = fr.get(instr.Results[0])
 		default:
 			var res []value
@@ -272,30 +246,18 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		return kReturn
 
 	case *ssa.RunDefers:
-		log.Println("RunDefers")
-
 		fr.runDefers()
 
 	case *ssa.Panic:
-		log.Println("Panic")
-
 		panic(targetPanic{fr.get(instr.X)})
 
 	case *ssa.Send:
-		log.Println("Send")
-
 		fr.get(instr.Chan).(chan value) <- fr.get(instr.X)
 
 	case *ssa.Store:
-		log.Println("Store")
-
 		store(deref(instr.Addr.Type()), fr.get(instr.Addr).(*value), fr.get(instr.Val))
 
 	case *ssa.If:
-		log.Println("If", instr.String(), instr.Cond.String(), fr.block.Succs[0].Instrs[0], fr.block.Succs[1].Instrs[0])
-
-		fr.api.MkIfInst(instr.Cond.String(), fr.block.Succs[0].Instrs[0], fr.block.Succs[1].Instrs[0])
-
 		succ := 1
 		if fr.get(instr.Cond).(bool) {
 			succ = 0
@@ -304,14 +266,10 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		return kJump
 
 	case *ssa.Jump:
-		log.Println("Jump")
-
 		fr.prevBlock, fr.block = fr.block, fr.block.Succs[0]
 		return kJump
 
 	case *ssa.Defer:
-		log.Println("Defer")
-
 		fn, args := prepareCall(fr, &instr.Call)
 		fr.defers = &deferred{
 			fn:    fn,
@@ -321,8 +279,6 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		}
 
 	case *ssa.Go:
-		log.Println("Go")
-
 		fn, args := prepareCall(fr, &instr.Call)
 		atomic.AddInt32(&fr.i.goroutines, 1)
 		go func() {
@@ -331,13 +287,9 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		}()
 
 	case *ssa.MakeChan:
-		log.Println("MakeChan")
-
 		fr.env[instr] = make(chan value, asInt64(fr.get(instr.Size)))
 
 	case *ssa.Alloc:
-		log.Println("Alloc")
-
 		var addr *value
 		if instr.Heap {
 			// new
@@ -350,8 +302,6 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		*addr = zero(deref(instr.Type()))
 
 	case *ssa.MakeSlice:
-		log.Println("MakeSlice")
-
 		slice := make([]value, asInt64(fr.get(instr.Cap)))
 		tElt := instr.Type().Underlying().(*types.Slice).Elem()
 		for i := range slice {
@@ -360,8 +310,6 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		fr.env[instr] = slice[:asInt64(fr.get(instr.Len))]
 
 	case *ssa.MakeMap:
-		log.Println("MakeMap")
-
 		var reserve int64
 		if instr.Reserve != nil {
 			reserve = asInt64(fr.get(instr.Reserve))
@@ -372,28 +320,18 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		fr.env[instr] = makeMap(instr.Type().Underlying().(*types.Map).Key(), reserve)
 
 	case *ssa.Range:
-		log.Println("Range")
-
 		fr.env[instr] = rangeIter(fr.get(instr.X), instr.X.Type())
 
 	case *ssa.Next:
-		log.Println("Next")
-
 		fr.env[instr] = fr.get(instr.Iter).(iter).next()
 
 	case *ssa.FieldAddr:
-		log.Println("FieldAddr")
-
 		fr.env[instr] = &(*fr.get(instr.X).(*value)).(structure)[instr.Field]
 
 	case *ssa.Field:
-		log.Println("Field")
-
 		fr.env[instr] = fr.get(instr.X).(structure)[instr.Field]
 
 	case *ssa.IndexAddr:
-		log.Println("IndexAddr")
-
 		x := fr.get(instr.X)
 		idx := fr.get(instr.Index)
 		switch x := x.(type) {
@@ -406,8 +344,6 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		}
 
 	case *ssa.Index:
-		log.Println("Index")
-
 		x := fr.get(instr.X)
 		idx := fr.get(instr.Index)
 
@@ -421,13 +357,9 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		}
 
 	case *ssa.Lookup:
-		log.Println("Lookup")
-
 		fr.env[instr] = lookup(instr, fr.get(instr.X), fr.get(instr.Index))
 
 	case *ssa.MapUpdate:
-		log.Println("MapUpdate")
-
 		m := fr.get(instr.Map)
 		key := fr.get(instr.Key)
 		v := fr.get(instr.Value)
@@ -441,13 +373,9 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		}
 
 	case *ssa.TypeAssert:
-		log.Println("TypeAssert")
-
 		fr.env[instr] = typeAssert(fr.i, instr, fr.get(instr.X).(iface))
 
 	case *ssa.MakeClosure:
-		log.Println("MakeClosure")
-
 		var bindings []value
 		for _, binding := range instr.Bindings {
 			bindings = append(bindings, fr.get(binding))
@@ -455,8 +383,6 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		fr.env[instr] = &closure{instr.Fn.(*ssa.Function), bindings}
 
 	case *ssa.Phi:
-		log.Println("Phi")
-
 		for i, pred := range instr.Block().Preds {
 			if fr.prevBlock == pred {
 				fr.env[instr] = fr.get(instr.Edges[i])
@@ -465,8 +391,6 @@ func visitInstrOld(fr *frame, instr ssa.Instruction) continuation {
 		}
 
 	case *ssa.Select:
-		log.Println("Select")
-
 		var cases []reflect.SelectCase
 		if !instr.Blocking {
 			cases = append(cases, reflect.SelectCase{
@@ -531,7 +455,12 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 	case *ssa.BinOp:
 		log.Println("BinOp", instr.X.Name(), instr.Op.String(), instr.Y.Name())
 
-		api.MkIntSignedGreaterExpr(instr.X.Name(), instr.Y.Name())
+		switch instr.Op {
+		case token.LSS:
+			api.MkIntSignedLessExpr(instr.X.Name(), instr.Y.Name())
+		case token.GTR:
+			api.MkIntSignedGreaterExpr(instr.X.Name(), instr.Y.Name())
+		}
 
 	case *ssa.Call:
 		log.Println("Call")
@@ -588,7 +517,7 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 			instr.Block().Succs[1].Instrs[0],
 		)
 
-		api.MkIfInst(instr.Cond.String(), instr.Block().Succs[0].Instrs[0], instr.Block().Succs[1].Instrs[0])
+		api.MkIfInst(instr.Cond.String(), &instr.Block().Succs[0].Instrs[0], &instr.Block().Succs[1].Instrs[0])
 		return kJump
 
 	case *ssa.Jump:
