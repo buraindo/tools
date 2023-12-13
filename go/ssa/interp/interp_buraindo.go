@@ -453,14 +453,9 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		log.Println("UnOp")
 
 	case *ssa.BinOp:
-		log.Println("BinOp", instr.X.Name(), instr.Op.String(), instr.Y.Name())
+		api.Log("BinOp", instr.X.Name(), instr.Op.String(), instr.Y.Name())
 
-		switch instr.Op {
-		case token.LSS:
-			api.MkIntSignedLessExpr(instr.X.Name(), instr.Y.Name())
-		case token.GTR:
-			api.MkIntSignedGreaterExpr(instr.X.Name(), instr.Y.Name())
-		}
+		api.MkBinOp(instr)
 
 	case *ssa.Call:
 		log.Println("Call")
@@ -487,12 +482,12 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		log.Println("Slice")
 
 	case *ssa.Return:
-		log.Println("Return", instr.Parent(), instr.Results)
+		api.Log("Return", instr.Parent(), instr.Results)
 
 		switch len(instr.Results) {
 		case 0:
 		case 1:
-			api.MkReturnInst(instr.Results[0].Name())
+			api.MkReturn(instr.Results[0].Name())
 		default:
 		}
 		return kReturn
@@ -510,18 +505,18 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		log.Println("Store")
 
 	case *ssa.If:
-		log.Println("If",
+		api.Log("If",
 			instr.String(),
 			instr.Cond.String(),
 			instr.Block().Succs[0].Instrs[0],
 			instr.Block().Succs[1].Instrs[0],
 		)
 
-		api.MkIfInst(instr.Cond.String(), &instr.Block().Succs[0].Instrs[0], &instr.Block().Succs[1].Instrs[0])
+		api.MkIf(instr.Cond.Name(), &instr.Block().Succs[0].Instrs[0], &instr.Block().Succs[1].Instrs[0])
 		return kJump
 
 	case *ssa.Jump:
-		log.Println("Jump")
+		api.Log("Jump")
 
 		return kJump
 
@@ -574,7 +569,11 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		log.Println("MakeClosure")
 
 	case *ssa.Phi:
-		log.Println("Phi")
+		log.Println("Phi",
+			instr.String(),
+			instr.Edges,
+			instr.Comment,
+		)
 
 	case *ssa.Select:
 		log.Println("Select")

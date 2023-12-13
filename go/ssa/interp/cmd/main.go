@@ -22,7 +22,7 @@ func main() {
 }
 
 func testInterpret() {
-	i, err := newInterpreter("/home/buraindo/programs/max2.go", "max2", config{
+	i, err := newInterpreter("/home/buraindo/programs/loop_infinite.go", "loop", config{
 		debugLog:      false,
 		enableTracing: false,
 		dumpSsa:       true,

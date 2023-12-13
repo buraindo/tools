@@ -50,27 +50,28 @@ static void callMkIntRegisterReading(mkIntRegisterReading f, char* name, int idx
 	f(name, idx);
 }
 
-typedef void (*mkIntSignedExpr)(char*, char*);
-static void callMkIntSignedExpr(mkIntSignedExpr f, char* fst, char* snd) {
-	f(fst, snd);
+typedef void (*mkBinOp)(char*, char*, char*);
+static void callMkBinOp(mkBinOp f, char* name, char* fst, char* snd) {
+	f(name, fst, snd);
 }
 
-typedef void (*mkIfInst)(char*, struct Instruction, struct Instruction);
-static void callMkIfInst(mkIfInst f, char* expr, struct Instruction pos, struct Instruction neg) {
+typedef void (*mkIf)(char*, struct Instruction, struct Instruction);
+static void callMkIf(mkIf f, char* expr, struct Instruction pos, struct Instruction neg) {
 	f(expr, pos, neg);
 }
 
-typedef void (*mkReturnInst)(char*);
-static void callMkReturnInst(mkReturnInst f, char* name) {
+typedef void (*mkReturn)(char*);
+static void callMkReturn(mkReturn f, char* name) {
 	f(name);
 }
 
 struct Api {
 	mkIntRegisterReading mkIntRegisterReading;
-	mkIntSignedExpr mkIntSignedLessExpr;
-	mkIntSignedExpr mkIntSignedGreaterExpr;
-	mkIfInst mkIfInst;
-	mkReturnInst mkReturnInst;
+	mkBinOp mkLess;
+	mkBinOp mkGreater;
+	mkBinOp mkAdd;
+	mkIf mkIf;
+	mkReturn mkReturn;
 };
 */
 import "C"
@@ -78,10 +79,12 @@ import "C"
 import (
 	"context"
 	"fmt"
+	"go/token"
 	"go/types"
 	"log"
 	"log/slog"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"unsafe"
@@ -102,18 +105,20 @@ type javaBridge struct {
 	jvm         *jnigi.JVM
 	interpreter *interp.Interpreter
 	callGraph   *callgraph.Graph
-	calls       int
 	registry    map[uintptr]any
+	goCalls     int
+	javaCalls   int
 }
 
 var anyType = types.Type(types.NewInterfaceType(nil, nil).Complete())
 var bridge = &javaBridge{
 	log:      slog.New(discardHandler{}),
-	calls:    2,
 	registry: make(map[uintptr]any),
 }
 
 func (b *javaBridge) call(f func(*jnigi.Env) error) error {
+	b.javaCalls++
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -235,6 +240,8 @@ func initialize(file, entrypoint string, debug bool) C.struct_Result {
 	if debug {
 		bridge.log = slog.Default()
 	}
+	bridge.javaCalls = 0
+	bridge.goCalls = 0
 
 	program := bridge.interpreter.Program()
 	// TODO: fix panic with import "reflect"
@@ -251,6 +258,7 @@ func initialize(file, entrypoint string, debug bool) C.struct_Result {
 
 //export getMain
 func getMain() C.struct_Method {
+	bridge.goCalls++
 	bridge.log.Info("getMain out:", toPointer(bridge.interpreter.Main()))
 
 	return toCMethod(bridge.interpreter.Main())
@@ -258,6 +266,7 @@ func getMain() C.struct_Method {
 
 //export getMethod
 func getMethod(name string) C.struct_Method {
+	bridge.goCalls++
 	bridge.log.Info("getMethod in:", name)
 
 	method := bridge.interpreter.Package().Func(name)
@@ -273,6 +282,7 @@ func getMethod(name string) C.struct_Method {
 
 //export predecessors
 func predecessors(pointer uintptr) C.struct_Slice {
+	bridge.goCalls++
 	bridge.log.Info("predecessors in:", pointer)
 
 	inst := *fromPointer[ssa.Instruction](pointer)
@@ -298,6 +308,7 @@ func predecessors(pointer uintptr) C.struct_Slice {
 
 //export successors
 func successors(pointer uintptr) C.struct_Slice {
+	bridge.goCalls++
 	bridge.log.Info("successors in:", pointer, *fromPointer[ssa.Instruction](pointer))
 
 	inst := *fromPointer[ssa.Instruction](pointer)
@@ -335,6 +346,7 @@ func successors(pointer uintptr) C.struct_Slice {
 
 //export callees
 func callees(pointer uintptr) C.struct_Slice {
+	bridge.goCalls++
 	bridge.log.Info("callees in:", pointer)
 
 	inst := *fromPointer[ssa.Instruction](pointer)
@@ -362,6 +374,7 @@ func callees(pointer uintptr) C.struct_Slice {
 
 //export callers
 func callers(pointer uintptr) C.struct_Slice {
+	bridge.goCalls++
 	bridge.log.Info("callers in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
@@ -380,6 +393,7 @@ func callers(pointer uintptr) C.struct_Slice {
 
 //export entryPoints
 func entryPoints(pointer uintptr) C.struct_Slice {
+	bridge.goCalls++
 	bridge.log.Info("entryPoints in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
@@ -392,6 +406,7 @@ func entryPoints(pointer uintptr) C.struct_Slice {
 
 //export exitPoints
 func exitPoints(pointer uintptr) C.struct_Slice {
+	bridge.goCalls++
 	bridge.log.Info("exitPoints in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
@@ -413,6 +428,7 @@ func exitPoints(pointer uintptr) C.struct_Slice {
 
 //export methodOf
 func methodOf(pointer uintptr) C.struct_Method {
+	bridge.goCalls++
 	bridge.log.Info("methodOf in:", pointer)
 
 	method := (*fromPointer[ssa.Instruction](pointer)).Parent()
@@ -424,6 +440,7 @@ func methodOf(pointer uintptr) C.struct_Method {
 
 //export statementsOf
 func statementsOf(pointer uintptr) C.struct_Slice {
+	bridge.goCalls++
 	bridge.log.Info("statementsOf in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
@@ -446,11 +463,15 @@ func statementsOf(pointer uintptr) C.struct_Slice {
 
 //export getAnyType
 func getAnyType() C.struct_Type {
+	bridge.goCalls++
+
 	return toCType(&anyType)
 }
 
 //export findSubTypes
 func findSubTypes(pointer uintptr) C.struct_Slice {
+	bridge.goCalls++
+
 	t := *fromPointer[types.Type](pointer)
 	if !types.IsInterface(t) {
 		return emptyCSlice()
@@ -470,6 +491,8 @@ func findSubTypes(pointer uintptr) C.struct_Slice {
 
 //export isInstantiable
 func isInstantiable(pointer uintptr) C.bool {
+	bridge.goCalls++
+
 	t := *fromPointer[types.Type](pointer)
 	// TODO: maybe channels also need to be considered not instantiable
 	result := !types.IsInterface(t)
@@ -478,6 +501,8 @@ func isInstantiable(pointer uintptr) C.bool {
 
 //export isFinal
 func isFinal(pointer uintptr) C.bool {
+	bridge.goCalls++
+
 	t := *fromPointer[types.Type](pointer)
 	result := !types.IsInterface(t)
 	return C.bool(result)
@@ -485,6 +510,8 @@ func isFinal(pointer uintptr) C.bool {
 
 //export hasCommonSubtype
 func hasCommonSubtype(pointer uintptr, other []C.struct_Type) C.bool {
+	bridge.goCalls++
+
 	allTypes := make([]types.Type, 0, len(other)+1)
 	allTypes = append(allTypes, *fromPointer[types.Type](pointer))
 	for _, t := range other {
@@ -503,6 +530,8 @@ func hasCommonSubtype(pointer uintptr, other []C.struct_Type) C.bool {
 
 //export isSupertype
 func isSupertype(supertypePointer, typePointer uintptr) C.bool {
+	bridge.goCalls++
+
 	t, v := *fromPointer[types.Type](supertypePointer), *fromPointer[types.Type](typePointer)
 	result := types.Identical(v, t) || types.AssignableTo(v, t)
 	return C.bool(result)
@@ -519,6 +548,8 @@ type MethodInfo struct {
 
 //export methodInfo
 func methodInfo(pointer uintptr) C.struct_MethodInfo {
+	bridge.goCalls++
+
 	bridge.log.Info("methodInfo in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
@@ -529,6 +560,13 @@ func methodInfo(pointer uintptr) C.struct_MethodInfo {
 		out.Parameters = append(out.Parameters, &typ)
 	}
 	out.LocalsCount = len(function.Locals)
+	for _, b := range function.Blocks {
+		for _, i := range b.Instrs {
+			if reflect.ValueOf(i).Elem().Field(0).Type().Name() == "register" {
+				out.LocalsCount++
+			}
+		}
+	}
 
 	bridge.log.Info("methodInfo out:", toMethodInfoString([]*MethodInfo{out}))
 
@@ -537,6 +575,8 @@ func methodInfo(pointer uintptr) C.struct_MethodInfo {
 
 //export stepRef
 func stepRef(obj C.struct_Object) C.bool {
+	bridge.goCalls++
+
 	object := jnigi.WrapJObject(uintptr(obj.pointer), C.GoString(obj.className), bool(obj.isArray))
 	err := bridge.call(func(env *jnigi.Env) error {
 		return object.CallMethod(env, "mkBvRegisterReading", nil, 0)
@@ -557,32 +597,54 @@ type Api struct {
 }
 
 func (a *Api) MkIntRegisterReading(name string, idx int) {
+	bridge.javaCalls++
+
 	C.callMkIntRegisterReading(a.api.mkIntRegisterReading, C.CString(name), C.int(idx))
 }
 
-func (a *Api) MkIntSignedLessExpr(fst, snd string) {
-	C.callMkIntSignedExpr(a.api.mkIntSignedLessExpr, C.CString(fst), C.CString(snd))
+func (a *Api) MkBinOp(inst *ssa.BinOp) {
+	bridge.javaCalls++
+
+	fst := resolveVarName(inst.X)
+	snd := resolveVarName(inst.Y)
+	name := inst.Name()
+	switch inst.Op {
+	case token.LSS:
+		C.callMkBinOp(a.api.mkLess, C.CString(name), C.CString(fst), C.CString(snd))
+	case token.GTR:
+		C.callMkBinOp(a.api.mkGreater, C.CString(name), C.CString(fst), C.CString(snd))
+	case token.ADD:
+		C.callMkBinOp(a.api.mkAdd, C.CString(name), C.CString(fst), C.CString(snd))
+	}
 }
 
-func (a *Api) MkIntSignedGreaterExpr(fst, snd string) {
-	C.callMkIntSignedExpr(a.api.mkIntSignedGreaterExpr, C.CString(fst), C.CString(snd))
+func (a *Api) MkIf(expr string, pos, neg *ssa.Instruction) {
+	bridge.javaCalls++
+
+	C.callMkIf(a.api.mkIf, C.CString(expr), toCInstruction(pos), toCInstruction(neg))
 }
 
-func (a *Api) MkIfInst(expr string, pos, neg *ssa.Instruction) {
-	C.callMkIfInst(a.api.mkIfInst, C.CString(expr), toCInstruction(pos), toCInstruction(neg))
+func (a *Api) MkReturn(name string) {
+	bridge.javaCalls++
+
+	C.callMkReturn(a.api.mkReturn, C.CString(name))
 }
 
-func (a *Api) MkReturnInst(name string) {
-	C.callMkReturnInst(a.api.mkReturnInst, C.CString(name))
+func (a *Api) Log(message string, values ...any) {
+	bridge.log.Info(message, values...)
 }
 
 //export start
 func start(javaApi C.struct_Api) C.int {
+	bridge.goCalls++
+
 	return C.int(bridge.interpreter.Start(&Api{api: javaApi}))
 }
 
 //export step
 func step(javaApi C.struct_Api, pointer uintptr) C.struct_Instruction {
+	bridge.goCalls++
+
 	inst := *fromPointer[ssa.Instruction](pointer)
 	out := bridge.interpreter.Step(&Api{api: javaApi}, inst)
 	if out == nil {
@@ -692,18 +754,31 @@ func toTypeString(in []*types.Type) string {
 	return strings.Join(out, "; ")
 }
 
+func resolveVarName(in ssa.Value) string {
+	switch in := in.(type) {
+	case *ssa.Parameter:
+		f := in.Parent()
+		for i, p := range f.Params {
+			if p == in {
+				return fmt.Sprintf("p%d", i)
+			}
+		}
+	}
+	return in.Name()
+}
+
 // ---------------- region: utils
 
 // ---------------- region: test
 
 //export getCalls
 func getCalls() int {
-	return bridge.calls
+	return bridge.goCalls + bridge.javaCalls
 }
 
 //export inc
 func inc() {
-	bridge.calls++
+	bridge.goCalls++
 }
 
 //export interpreter
@@ -740,7 +815,7 @@ func getBridge() uintptr {
 
 //export getBridgeCalls
 func getBridgeCalls(pointer uintptr) int {
-	return fromPointer[javaBridge](pointer).calls
+	return fromPointer[javaBridge](pointer).goCalls
 }
 
 //export getMainPointer

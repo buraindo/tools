@@ -19,19 +19,20 @@ type Interpreter struct {
 
 type Api interface {
 	MkIntRegisterReading(name string, idx int)
-	MkIntSignedLessExpr(fst, snd string)
-	MkIntSignedGreaterExpr(fst, snd string)
-	MkIfInst(expr string, pos, neg *ssa.Instruction)
-	MkReturnInst(name string)
+	MkBinOp(inst *ssa.BinOp)
+	MkIf(expr string, pos, neg *ssa.Instruction)
+	MkReturn(name string)
+
+	Log(message string, values ...any)
 }
 
 type discardApi struct{}
 
-func (discardApi) MkIntRegisterReading(string, int)                    {}
-func (discardApi) MkIntSignedLessExpr(string, string)                  {}
-func (discardApi) MkIntSignedGreaterExpr(string, string)               {}
-func (discardApi) MkIfInst(string, *ssa.Instruction, *ssa.Instruction) {}
-func (discardApi) MkReturnInst(string)                                 {}
+func (discardApi) MkIntRegisterReading(string, int)                {}
+func (discardApi) MkBinOp(*ssa.BinOp)                              {}
+func (discardApi) MkIf(string, *ssa.Instruction, *ssa.Instruction) {}
+func (discardApi) MkReturn(string)                                 {}
+func (discardApi) Log(string, ...any)                              {}
 
 func NewInterpreter(
 	program *ssa.Program,
@@ -221,6 +222,11 @@ func (i *Interpreter) step(api Api, inst ssa.Instruction) *ssa.Instruction {
 			}
 		}
 		return nil
+	case kJump:
+		if len(block.Succs) == 0 || len(block.Succs[0].Instrs) == 0 {
+			return nil
+		}
+		return &block.Succs[0].Instrs[0]
 	default:
 		return nil
 	}
