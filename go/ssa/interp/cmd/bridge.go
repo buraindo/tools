@@ -158,7 +158,7 @@ func toPointer[T any](in *T) uintptr {
 	return out
 }
 
-func resolveVarName(in ssa.Value) string {
+func resolveVar(in ssa.Value) string {
 	switch in := in.(type) {
 	case *ssa.Parameter:
 		f := in.Parent()
@@ -167,6 +167,8 @@ func resolveVarName(in ssa.Value) string {
 				return fmt.Sprintf("p%d", i)
 			}
 		}
+	case *ssa.Const:
+		return in.Value.String()
 	}
 	return in.Name()
 }

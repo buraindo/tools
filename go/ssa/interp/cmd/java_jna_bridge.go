@@ -464,8 +464,8 @@ func (a *JnaApi) MkIntRegisterReading(name string, idx int) {
 func (a *JnaApi) MkBinOp(inst *ssa.BinOp) {
 	bridge.javaCalls++
 
-	fst := resolveVarName(inst.X)
-	snd := resolveVarName(inst.Y)
+	fst := resolveVar(inst.X)
+	snd := resolveVar(inst.Y)
 	name := inst.Name()
 	switch inst.Op {
 	case token.LSS:
@@ -486,7 +486,7 @@ func (a *JnaApi) MkIf(expr string, pos, neg *ssa.Instruction) {
 func (a *JnaApi) MkReturn(value ssa.Value) {
 	bridge.javaCalls++
 
-	name := resolveVarName(value)
+	name := resolveVar(value)
 	C.callMkReturn(a.api.mkReturn, C.CString(name))
 }
 

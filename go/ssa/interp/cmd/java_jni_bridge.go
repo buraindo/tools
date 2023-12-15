@@ -378,8 +378,8 @@ func (a *JniApi) MkIntRegisterReading(_ string, idx int) {
 
 func (a *JniApi) MkBinOp(inst *ssa.BinOp) {
 	name := []byte(inst.Name())
-	fst := []byte(resolveVarName(inst.X))
-	snd := []byte(resolveVarName(inst.Y))
+	fst := []byte(resolveVar(inst.X))
+	snd := []byte(resolveVar(inst.Y))
 	var err error
 	switch inst.Op {
 	case token.LSS:
@@ -404,7 +404,7 @@ func (a *JniApi) MkIf(expr string, pos, neg *ssa.Instruction) {
 }
 
 func (a *JniApi) MkReturn(value ssa.Value) {
-	name := resolveVarName(value)
+	name := resolveVar(value)
 	if err := a.this.CallMethod(a.env, "mkReturn", nil, []byte(name)); err != nil {
 		a.Log("MkReturn error", err.Error())
 	}
