@@ -30,7 +30,7 @@ struct Method {
 };
 
 struct MethodInfo {
-	struct Slice parameters;
+	int parametersCount;
 	int localsCount;
 };
 
@@ -77,13 +77,9 @@ struct Api {
 import "C"
 
 import (
-	"context"
 	"fmt"
 	"go/token"
 	"go/types"
-	"log"
-	"log/slog"
-	"os"
 	"reflect"
 	"runtime"
 	"strings"
@@ -91,30 +87,10 @@ import (
 
 	"tekao.net/jnigi"
 
-	"golang.org/x/tools/go/callgraph"
-	"golang.org/x/tools/go/callgraph/cha"
-	"golang.org/x/tools/go/callgraph/vta"
-	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
-	"golang.org/x/tools/go/ssa/interp"
-	"golang.org/x/tools/go/ssa/ssautil"
 )
 
-type javaBridge struct {
-	log         *slog.Logger
-	jvm         *jnigi.JVM
-	interpreter *interp.Interpreter
-	callGraph   *callgraph.Graph
-	registry    map[uintptr]any
-	goCalls     int
-	javaCalls   int
-}
-
-var anyType = types.Type(types.NewInterfaceType(nil, nil).Complete())
-var bridge = &javaBridge{
-	log:      slog.New(discardHandler{}),
-	registry: make(map[uintptr]any),
-}
+var jvm *jnigi.JVM
 
 func (b *javaBridge) call(f func(*jnigi.Env) error) error {
 	b.javaCalls++
@@ -122,96 +98,12 @@ func (b *javaBridge) call(f func(*jnigi.Env) error) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	env := b.jvm.AttachCurrentThread()
+	env := jvm.AttachCurrentThread()
 	if err := f(env); err != nil {
 		return fmt.Errorf("call: %w", err)
 	}
 	return nil
 }
-
-func newInterpreter(file, entrypoint string, conf config) (*interp.Interpreter, error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
-	}
-	if err = f.Close(); err != nil {
-		return nil, fmt.Errorf("close file: %w", err)
-	}
-
-	mode := packages.NeedName |
-		packages.NeedFiles |
-		packages.NeedCompiledGoFiles |
-		packages.NeedImports |
-		packages.NeedDeps |
-		packages.NeedExportFile |
-		packages.NeedTypes |
-		packages.NeedTypesSizes |
-		packages.NeedTypesInfo |
-		packages.NeedSyntax |
-		packages.NeedModule |
-		packages.NeedEmbedFiles |
-		packages.NeedEmbedPatterns
-	cfg := &packages.Config{Mode: mode}
-	if conf.enableTracing {
-		cfg.Logf = log.Printf
-	}
-	initialPackages, err := packages.Load(cfg, file)
-	if err != nil {
-		return nil, err
-	}
-	if len(initialPackages) == 0 {
-		return nil, fmt.Errorf("no packages were loaded")
-	}
-
-	if packages.PrintErrors(initialPackages) > 0 {
-		return nil, fmt.Errorf("packages contain errors")
-	}
-
-	program, _ := ssautil.AllPackages(initialPackages, ssa.InstantiateGenerics|ssa.SanityCheckFunctions)
-	program.Build()
-
-	sizes := &types.StdSizes{
-		MaxAlign: 8,
-		WordSize: 8,
-	}
-	var interpMode interp.Mode
-	if conf.enableTracing {
-		interpMode |= interp.EnableTracing
-	}
-
-	mainPackages := ssautil.MainPackages(program.AllPackages())
-	if len(mainPackages) == 0 {
-		return nil, fmt.Errorf("error: 0 packages")
-	}
-	mainPackage := mainPackages[0]
-	if conf.dumpSsa {
-		dump(mainPackage)
-	}
-
-	return interp.NewInterpreter(program, mainPackage, interpMode, sizes, file, entrypoint, nil), nil
-}
-
-// ---------------- region: logger
-
-type discardHandler struct{}
-
-func (discardHandler) Enabled(context.Context, slog.Level) bool {
-	return false
-}
-
-func (discardHandler) Handle(context.Context, slog.Record) error {
-	return nil
-}
-
-func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler {
-	return d
-}
-
-func (d discardHandler) WithGroup(string) slog.Handler {
-	return d
-}
-
-// ---------------- region: logger
 
 // ---------------- region: init
 
@@ -219,35 +111,18 @@ func (d discardHandler) WithGroup(string) slog.Handler {
 //goland:noinspection GoSnakeCaseUsage
 func JNI_OnLoad(vm *C.JavaVM, _ unsafe.Pointer) C.jint {
 	fmt.Println("go: JNI_OnLoad called")
-	bridge.jvm, _ = jnigi.UseJVM(unsafe.Pointer(vm), nil, nil)
+	jvm, _ = jnigi.UseJVM(unsafe.Pointer(vm), nil, nil)
 	return C.JNI_VERSION_10
 }
 
 //export initialize
 func initialize(file, entrypoint string, debug bool) C.struct_Result {
-	var err error
-	bridge.interpreter, err = newInterpreter(file, entrypoint, config{
-		debugLog:      false,
-		enableTracing: false,
-		dumpSsa:       false,
-	})
-	if err != nil {
+	if err := initBridge(file, entrypoint, debug); err != nil {
 		return C.struct_Result{
-			message: C.CString(fmt.Sprintf("init interpreter: %v", err)),
+			message: C.CString(err.Error()),
 			code:    1,
 		}
 	}
-	if debug {
-		bridge.log = slog.Default()
-	}
-	bridge.javaCalls = 0
-	bridge.goCalls = 0
-
-	program := bridge.interpreter.Program()
-	// TODO: fix panic with import "reflect"
-	callGraph := vta.CallGraph(ssautil.AllFunctions(program), cha.CallGraph(program))
-	callGraph.DeleteSyntheticNodes()
-	bridge.callGraph = callGraph
 
 	return C.struct_Result{message: C.CString("successfully initialized"), code: 0}
 }
@@ -542,8 +417,8 @@ func isSupertype(supertypePointer, typePointer uintptr) C.bool {
 // ---------------- region: interpreter
 
 type MethodInfo struct {
-	Parameters  []*types.Type
-	LocalsCount int
+	ParametersCount int
+	LocalsCount     int
 }
 
 //export methodInfo
@@ -555,9 +430,8 @@ func methodInfo(pointer uintptr) C.struct_MethodInfo {
 	function := fromPointer[ssa.Function](pointer)
 
 	out := &MethodInfo{}
-	for _, p := range function.Params {
-		typ := p.Type()
-		out.Parameters = append(out.Parameters, &typ)
+	for range function.Params {
+		out.ParametersCount++
 	}
 	out.LocalsCount = len(function.Locals)
 	for _, b := range function.Blocks {
@@ -573,36 +447,21 @@ func methodInfo(pointer uintptr) C.struct_MethodInfo {
 	return toCMethodInfo(out)
 }
 
-//export stepRef
-func stepRef(obj C.struct_Object) C.bool {
-	bridge.goCalls++
-
-	object := jnigi.WrapJObject(uintptr(obj.pointer), C.GoString(obj.className), bool(obj.isArray))
-	err := bridge.call(func(env *jnigi.Env) error {
-		return object.CallMethod(env, "mkBvRegisterReading", nil, 0)
-	})
-	if err != nil {
-		fmt.Println("step:", err)
-		return C.bool(false)
-	}
-	return C.bool(true)
-}
-
 // ---------------- region: interpreter
 
 // ---------------- region: api
 
-type Api struct {
+type JnaApi struct {
 	api C.struct_Api
 }
 
-func (a *Api) MkIntRegisterReading(name string, idx int) {
+func (a *JnaApi) MkIntRegisterReading(name string, idx int) {
 	bridge.javaCalls++
 
 	C.callMkIntRegisterReading(a.api.mkIntRegisterReading, C.CString(name), C.int(idx))
 }
 
-func (a *Api) MkBinOp(inst *ssa.BinOp) {
+func (a *JnaApi) MkBinOp(inst *ssa.BinOp) {
 	bridge.javaCalls++
 
 	fst := resolveVarName(inst.X)
@@ -618,19 +477,20 @@ func (a *Api) MkBinOp(inst *ssa.BinOp) {
 	}
 }
 
-func (a *Api) MkIf(expr string, pos, neg *ssa.Instruction) {
+func (a *JnaApi) MkIf(expr string, pos, neg *ssa.Instruction) {
 	bridge.javaCalls++
 
 	C.callMkIf(a.api.mkIf, C.CString(expr), toCInstruction(pos), toCInstruction(neg))
 }
 
-func (a *Api) MkReturn(name string) {
+func (a *JnaApi) MkReturn(value ssa.Value) {
 	bridge.javaCalls++
 
+	name := resolveVarName(value)
 	C.callMkReturn(a.api.mkReturn, C.CString(name))
 }
 
-func (a *Api) Log(message string, values ...any) {
+func (a *JnaApi) Log(message string, values ...any) {
 	bridge.log.Info(message, values...)
 }
 
@@ -638,7 +498,7 @@ func (a *Api) Log(message string, values ...any) {
 func start(javaApi C.struct_Api) C.int {
 	bridge.goCalls++
 
-	return C.int(bridge.interpreter.Start(&Api{api: javaApi}))
+	return C.int(bridge.interpreter.Start(&JnaApi{api: javaApi}))
 }
 
 //export step
@@ -646,7 +506,7 @@ func step(javaApi C.struct_Api, pointer uintptr) C.struct_Instruction {
 	bridge.goCalls++
 
 	inst := *fromPointer[ssa.Instruction](pointer)
-	out := bridge.interpreter.Step(&Api{api: javaApi}, inst)
+	out := bridge.interpreter.Step(&JnaApi{api: javaApi}, inst)
 	if out == nil {
 		return C.struct_Instruction{
 			pointer:   C.size_t(0),
@@ -659,17 +519,6 @@ func step(javaApi C.struct_Api, pointer uintptr) C.struct_Instruction {
 // ---------------- region: api
 
 // ---------------- region: utils
-
-//goland:noinspection GoVetUnsafePointer
-func fromPointer[T any](in uintptr) *T {
-	return bridge.registry[in].(*T)
-}
-
-func toPointer[T any](in *T) uintptr {
-	out := uintptr(unsafe.Pointer(in))
-	bridge.registry[out] = in
-	return out
-}
 
 func emptyCSlice() C.struct_Slice {
 	return C.struct_Slice{
@@ -707,8 +556,8 @@ func toCMethod(in *ssa.Function) C.struct_Method {
 
 func toCMethodInfo(in *MethodInfo) C.struct_MethodInfo {
 	return C.struct_MethodInfo{
-		parameters:  toCSlice(in.Parameters, toCType, C.sizeof_struct_Type),
-		localsCount: C.int(in.LocalsCount),
+		parametersCount: C.int(in.ParametersCount),
+		localsCount:     C.int(in.LocalsCount),
 	}
 }
 
@@ -740,31 +589,9 @@ func toMethodString(in []*ssa.Function) string {
 func toMethodInfoString(in []*MethodInfo) string {
 	out := make([]string, 0, len(in))
 	for i := range in {
-		params := toTypeString(in[i].Parameters)
-		out = append(out, fmt.Sprintf("%s (%d locals)", params, in[i].LocalsCount))
+		out = append(out, fmt.Sprintf("%d params, %d locals", in[i].ParametersCount, in[i].LocalsCount))
 	}
 	return strings.Join(out, "; ")
-}
-
-func toTypeString(in []*types.Type) string {
-	out := make([]string, 0, len(in))
-	for i := range in {
-		out = append(out, fmt.Sprintf("%s", (*in[i]).String()))
-	}
-	return strings.Join(out, "; ")
-}
-
-func resolveVarName(in ssa.Value) string {
-	switch in := in.(type) {
-	case *ssa.Parameter:
-		f := in.Parent()
-		for i, p := range f.Params {
-			if p == in {
-				return fmt.Sprintf("p%d", i)
-			}
-		}
-	}
-	return in.Name()
 }
 
 // ---------------- region: utils
@@ -887,7 +714,22 @@ func callJavaMethod(obj C.struct_Object) {
 
 //export frameStep
 func frameStep(javaApi C.struct_Api) C.bool {
-	return C.bool(bridge.interpreter.FrameStep(&Api{api: javaApi}))
+	return C.bool(bridge.interpreter.FrameStep(&JnaApi{api: javaApi}))
+}
+
+//export stepRef
+func stepRef(obj C.struct_Object) C.bool {
+	bridge.goCalls++
+
+	object := jnigi.WrapJObject(uintptr(obj.pointer), C.GoString(obj.className), bool(obj.isArray))
+	err := bridge.call(func(env *jnigi.Env) error {
+		return object.CallMethod(env, "mkBvRegisterReading", nil, 0)
+	})
+	if err != nil {
+		fmt.Println("step:", err)
+		return C.bool(false)
+	}
+	return C.bool(true)
 }
 
 // ---------------- region: test

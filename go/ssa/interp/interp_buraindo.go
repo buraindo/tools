@@ -487,7 +487,7 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		switch len(instr.Results) {
 		case 0:
 		case 1:
-			api.MkReturn(instr.Results[0].Name())
+			api.MkReturn(instr.Results[0])
 		default:
 		}
 		return kReturn

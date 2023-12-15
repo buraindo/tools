@@ -21,7 +21,7 @@ type Api interface {
 	MkIntRegisterReading(name string, idx int)
 	MkBinOp(inst *ssa.BinOp)
 	MkIf(expr string, pos, neg *ssa.Instruction)
-	MkReturn(name string)
+	MkReturn(inst ssa.Value)
 
 	Log(message string, values ...any)
 }
@@ -31,7 +31,7 @@ type discardApi struct{}
 func (discardApi) MkIntRegisterReading(string, int)                {}
 func (discardApi) MkBinOp(*ssa.BinOp)                              {}
 func (discardApi) MkIf(string, *ssa.Instruction, *ssa.Instruction) {}
-func (discardApi) MkReturn(string)                                 {}
+func (discardApi) MkReturn(ssa.Value)                              {}
 func (discardApi) Log(string, ...any)                              {}
 
 func NewInterpreter(
