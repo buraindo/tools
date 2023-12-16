@@ -513,7 +513,7 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		)
 
 		api.MkIf(instr.Cond.Name(), &instr.Block().Succs[0].Instrs[0], &instr.Block().Succs[1].Instrs[0])
-		return kJump
+		return kReturn
 
 	case *ssa.Jump:
 		api.Log("Jump", instr, instr.Block().Index, api.GetLastBlock())
