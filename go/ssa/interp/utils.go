@@ -22,8 +22,12 @@ type Api interface {
 	MkBinOp(inst *ssa.BinOp)
 	MkIf(expr string, pos, neg *ssa.Instruction)
 	MkReturn(inst ssa.Value)
+	MkVariable(name string, value ssa.Value)
 
-	Log(message string, values ...any)
+	GetLastBlock() int
+	SetLastBlock(block int)
+
+	Log(values ...any)
 }
 
 type discardApi struct{}
@@ -32,7 +36,10 @@ func (discardApi) MkIntRegisterReading(string, int)                {}
 func (discardApi) MkBinOp(*ssa.BinOp)                              {}
 func (discardApi) MkIf(string, *ssa.Instruction, *ssa.Instruction) {}
 func (discardApi) MkReturn(ssa.Value)                              {}
-func (discardApi) Log(string, ...any)                              {}
+func (discardApi) MkVariable(string, ssa.Value)                    {}
+func (discardApi) Log(...any)                                      {}
+func (discardApi) GetLastBlock() int                               { return 0 }
+func (discardApi) SetLastBlock(int)                                {}
 
 func NewInterpreter(
 	program *ssa.Program,
@@ -101,15 +108,8 @@ func (i *Interpreter) Start(api Api) (exitCode int) {
 		default:
 			fmt.Printf("panic: unexpected type: %T: %v\n", p, p)
 		}
-
-		// TODO(adonovan): dump panicking interpreter goroutine?
-		// buf := make([]byte, 0x10000)
-		// runtime.Stack(buf, false)
-		// fmt.Fprintln(os.Stderr, string(buf))
-		// (Or dump panicking target goroutine?)
 	}()
 
-	// Run!
 	//call(i.interpreter, nil, nil, i.Init(), nil)
 	if mainFn := i.Func(i.entrypoint); mainFn != nil {
 		call(i.interpreter, &frame{api: api}, nil, mainFn, nil)
@@ -206,8 +206,21 @@ func (i *Interpreter) frameStep(fr *frame) {
 	}
 }
 
-func (i *Interpreter) step(api Api, inst ssa.Instruction) *ssa.Instruction {
+func (i *Interpreter) step(api Api, inst ssa.Instruction) (out *ssa.Instruction) {
 	block := inst.Block()
+
+	defer func() {
+		if out == nil {
+			return
+		}
+
+		switch (inst).(type) {
+		case *ssa.Phi, *ssa.If:
+		default:
+			api.SetLastBlock(block.Index)
+		}
+	}()
+
 	switch visitInstr(api, inst) {
 	case kNext:
 		for j := range block.Instrs {

@@ -65,6 +65,21 @@ static void callMkReturn(mkReturn f, char* name) {
 	f(name);
 }
 
+typedef void (*mkVariable)(char*, char*);
+static void callMkVariable(mkVariable f, char* name, char* value) {
+	f(name, value);
+}
+
+typedef int (*getLastBlock)();
+static int callGetLastBlock(getLastBlock f) {
+	return f();
+}
+
+typedef void (*setLastBlock)();
+static void callSetLastBlock(setLastBlock f, int block) {
+	return f(block);
+}
+
 struct Api {
 	mkIntRegisterReading mkIntRegisterReading;
 	mkBinOp mkLess;
@@ -72,6 +87,10 @@ struct Api {
 	mkBinOp mkAdd;
 	mkIf mkIf;
 	mkReturn mkReturn;
+	mkVariable mkVariable;
+
+	getLastBlock getLastBlock;
+	setLastBlock setLastBlock;
 };
 */
 import "C"
@@ -134,7 +153,7 @@ func initialize(file, entrypoint string, debug bool) C.struct_Result {
 //export getMain
 func getMain() C.struct_Method {
 	bridge.goCalls++
-	bridge.log.Info("getMain out:", toPointer(bridge.interpreter.Main()))
+	bridge.Log("getMain out:", toPointer(bridge.interpreter.Main()))
 
 	return toCMethod(bridge.interpreter.Main())
 }
@@ -142,11 +161,11 @@ func getMain() C.struct_Method {
 //export getMethod
 func getMethod(name string) C.struct_Method {
 	bridge.goCalls++
-	bridge.log.Info("getMethod in:", name)
+	bridge.Log("getMethod in:", name)
 
 	method := bridge.interpreter.Package().Func(name)
 
-	bridge.log.Info("getMethod out:", toPointer(method))
+	bridge.Log("getMethod out:", toPointer(method))
 
 	return toCMethod(method)
 }
@@ -158,7 +177,7 @@ func getMethod(name string) C.struct_Method {
 //export predecessors
 func predecessors(pointer uintptr) C.struct_Slice {
 	bridge.goCalls++
-	bridge.log.Info("predecessors in:", pointer)
+	bridge.Log("predecessors in:", pointer)
 
 	inst := *fromPointer[ssa.Instruction](pointer)
 	out := make([]*ssa.Instruction, 0)
@@ -176,7 +195,7 @@ func predecessors(pointer uintptr) C.struct_Slice {
 		out = append(out, &block.Instrs[i])
 	}
 
-	bridge.log.Info("predecessors out:", toInstructionString(out))
+	bridge.Log("predecessors out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
@@ -184,7 +203,7 @@ func predecessors(pointer uintptr) C.struct_Slice {
 //export successors
 func successors(pointer uintptr) C.struct_Slice {
 	bridge.goCalls++
-	bridge.log.Info("successors in:", pointer, *fromPointer[ssa.Instruction](pointer))
+	bridge.Log("successors in:", pointer, *fromPointer[ssa.Instruction](pointer))
 
 	inst := *fromPointer[ssa.Instruction](pointer)
 	if inst == nil {
@@ -214,7 +233,7 @@ func successors(pointer uintptr) C.struct_Slice {
 		}
 	}
 
-	bridge.log.Info("successors out:", toInstructionString(out))
+	bridge.Log("successors out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
@@ -222,7 +241,7 @@ func successors(pointer uintptr) C.struct_Slice {
 //export callees
 func callees(pointer uintptr) C.struct_Slice {
 	bridge.goCalls++
-	bridge.log.Info("callees in:", pointer)
+	bridge.Log("callees in:", pointer)
 
 	inst := *fromPointer[ssa.Instruction](pointer)
 	out := make([]*ssa.Function, 0)
@@ -242,7 +261,7 @@ func callees(pointer uintptr) C.struct_Slice {
 		out = append(out, call.Common().StaticCallee())
 	}
 
-	bridge.log.Info("callees out:", toMethodString(out))
+	bridge.Log("callees out:", toMethodString(out))
 
 	return toCSlice(out, toCMethod, C.sizeof_struct_Method)
 }
@@ -250,7 +269,7 @@ func callees(pointer uintptr) C.struct_Slice {
 //export callers
 func callers(pointer uintptr) C.struct_Slice {
 	bridge.goCalls++
-	bridge.log.Info("callers in:", pointer)
+	bridge.Log("callers in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
 	in := bridge.callGraph.Nodes[function].In
@@ -261,7 +280,7 @@ func callers(pointer uintptr) C.struct_Slice {
 		out = append(out, &inst)
 	}
 
-	bridge.log.Info("callers out:", toInstructionString(out))
+	bridge.Log("callers out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
@@ -269,12 +288,12 @@ func callers(pointer uintptr) C.struct_Slice {
 //export entryPoints
 func entryPoints(pointer uintptr) C.struct_Slice {
 	bridge.goCalls++
-	bridge.log.Info("entryPoints in:", pointer)
+	bridge.Log("entryPoints in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
 	out := []*ssa.Instruction{&function.Blocks[0].Instrs[0]}
 
-	bridge.log.Info("entryPoints out:", toInstructionString(out))
+	bridge.Log("entryPoints out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
@@ -282,7 +301,7 @@ func entryPoints(pointer uintptr) C.struct_Slice {
 //export exitPoints
 func exitPoints(pointer uintptr) C.struct_Slice {
 	bridge.goCalls++
-	bridge.log.Info("exitPoints in:", pointer)
+	bridge.Log("exitPoints in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
 	out := make([]*ssa.Instruction, 0)
@@ -296,7 +315,7 @@ func exitPoints(pointer uintptr) C.struct_Slice {
 		}
 	}
 
-	bridge.log.Info("exitPoints out:", toInstructionString(out))
+	bridge.Log("exitPoints out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
@@ -304,11 +323,11 @@ func exitPoints(pointer uintptr) C.struct_Slice {
 //export methodOf
 func methodOf(pointer uintptr) C.struct_Method {
 	bridge.goCalls++
-	bridge.log.Info("methodOf in:", pointer)
+	bridge.Log("methodOf in:", pointer)
 
 	method := (*fromPointer[ssa.Instruction](pointer)).Parent()
 
-	bridge.log.Info("methodOf out:", toPointer(method), method.Name())
+	bridge.Log("methodOf out:", toPointer(method), method.Name())
 
 	return toCMethod(method)
 }
@@ -316,7 +335,7 @@ func methodOf(pointer uintptr) C.struct_Method {
 //export statementsOf
 func statementsOf(pointer uintptr) C.struct_Slice {
 	bridge.goCalls++
-	bridge.log.Info("statementsOf in:", pointer)
+	bridge.Log("statementsOf in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
 	out := make([]*ssa.Instruction, 0)
@@ -327,7 +346,7 @@ func statementsOf(pointer uintptr) C.struct_Slice {
 		}
 	}
 
-	bridge.log.Info("statementsOf out:", toInstructionString(out))
+	bridge.Log("statementsOf out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
@@ -425,7 +444,7 @@ type MethodInfo struct {
 func methodInfo(pointer uintptr) C.struct_MethodInfo {
 	bridge.goCalls++
 
-	bridge.log.Info("methodInfo in:", pointer)
+	bridge.Log("methodInfo in:", pointer)
 
 	function := fromPointer[ssa.Function](pointer)
 
@@ -442,7 +461,7 @@ func methodInfo(pointer uintptr) C.struct_MethodInfo {
 		}
 	}
 
-	bridge.log.Info("methodInfo out:", toMethodInfoString([]*MethodInfo{out}))
+	bridge.Log("methodInfo out:", toMethodInfoString([]*MethodInfo{out}))
 
 	return toCMethodInfo(out)
 }
@@ -490,8 +509,21 @@ func (a *JnaApi) MkReturn(value ssa.Value) {
 	C.callMkReturn(a.api.mkReturn, C.CString(name))
 }
 
-func (a *JnaApi) Log(message string, values ...any) {
-	bridge.log.Info(message, values...)
+func (a *JnaApi) MkVariable(name string, value ssa.Value) {
+	valueName := resolveVar(value)
+	C.callMkVariable(a.api.mkVariable, C.CString(name), C.CString(valueName))
+}
+
+func (a *JnaApi) GetLastBlock() int {
+	return int(C.callGetLastBlock(a.api.getLastBlock))
+}
+
+func (a *JnaApi) SetLastBlock(block int) {
+	C.callSetLastBlock(a.api.setLastBlock, C.int(block))
+}
+
+func (a *JnaApi) Log(values ...any) {
+	bridge.Log(values...)
 }
 
 //export start
@@ -680,7 +712,7 @@ func methods() *C.struct_Method {
 			name:    C.CString(f.Name()),
 		}
 	}
-	bridge.log.Info("methods out:", toMethodString(functions))
+	bridge.Log("methods out:", toMethodString(functions))
 	return out
 }
 
@@ -695,7 +727,7 @@ func slice() C.struct_Slice {
 //export methodsSlice
 func methodsSlice() C.struct_Slice {
 	out := []*ssa.Function{bridge.interpreter.Main(), bridge.interpreter.Init()}
-	bridge.log.Info("methods out:", toMethodString(out))
+	bridge.Log("methods out:", toMethodString(out))
 	return toCSlice(out, toCMethod, C.sizeof_struct_Method)
 }
 

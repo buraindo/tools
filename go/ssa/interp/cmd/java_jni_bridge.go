@@ -32,6 +32,8 @@ static jintArray ToIntArray(JNIEnv* env, jsize len, jint* buf) {
 */
 import "C"
 
+var api = &JniApi{}
+
 // ---------------- region: initialize
 
 //export Java_org_usvm_bridge_JniBridge_initialize
@@ -410,8 +412,35 @@ func (a *JniApi) MkReturn(value ssa.Value) {
 	}
 }
 
-func (a *JniApi) Log(message string, values ...any) {
-	bridge.log.Info(message, values...)
+func (a *JniApi) MkVariable(name string, value ssa.Value) {
+	valueName := resolveVar(value)
+	if err := a.this.CallMethod(a.env, "mkVariable", nil, []byte(name), []byte(valueName)); err != nil {
+		a.Log("MkVariable error", err.Error())
+	}
+}
+
+func (a *JniApi) GetLastBlock() int {
+	var block int
+	if err := a.this.CallMethod(a.env, "getLastBlock", &block); err != nil {
+		a.Log("GetLastBlock error", err.Error())
+	}
+	return block
+}
+
+func (a *JniApi) SetLastBlock(block int) {
+	if err := a.this.CallMethod(a.env, "setLastBlock", nil, block); err != nil {
+		a.Log("SetLastBlock error", err.Error())
+	}
+}
+
+func (a *JniApi) With(env *C.JNIEnv, this C.jobject) *JniApi {
+	a.env = toEnv(env)
+	a.this = toThis(this)
+	return a
+}
+
+func (a *JniApi) Log(values ...any) {
+	bridge.Log(values...)
 }
 
 //export Java_org_usvm_bridge_JniBridge_start
@@ -419,7 +448,7 @@ func Java_org_usvm_bridge_JniBridge_start(
 	env *C.JNIEnv,
 	this C.jobject,
 ) C.int {
-	return C.int(bridge.interpreter.Start(&JniApi{env: toEnv(env), this: toThis(this)}))
+	return C.int(bridge.interpreter.Start(api.With(env, this)))
 }
 
 //export Java_org_usvm_bridge_JniBridge_step
@@ -429,7 +458,7 @@ func Java_org_usvm_bridge_JniBridge_step(
 	pointer uintptr,
 ) C.jlong {
 	inst := *fromPointer[ssa.Instruction](pointer)
-	out := bridge.interpreter.Step(&JniApi{env: toEnv(env), this: toThis(this)}, inst)
+	out := bridge.interpreter.Step(api.With(env, this), inst)
 	if out == nil {
 		return 0
 	}
@@ -451,10 +480,6 @@ func toThis(this C.jobject) *jnigi.ObjectRef {
 func toString(env *jnigi.Env, s C.jbyteArray) string {
 	array := env.NewByteArrayFromObject(jnigi.WrapJObject(uintptr(s), "byte", true))
 	return string(array.CopyBytes(env))
-}
-
-func toJByteArray(env *jnigi.Env, s string) C.jbyteArray {
-	return C.jbyteArray(env.NewByteArrayFromSlice([]byte(s)).GetObject().JObject())
 }
 
 func toBool(b C.jboolean) bool {

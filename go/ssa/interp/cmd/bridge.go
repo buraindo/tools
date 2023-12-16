@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"go/types"
 	"log"
-	"log/slog"
 	"os"
 	"unsafe"
 
@@ -19,7 +17,7 @@ import (
 )
 
 type javaBridge struct {
-	log         *slog.Logger
+	log         bool
 	interpreter *interp.Interpreter
 	callGraph   *callgraph.Graph
 	registry    map[uintptr]any
@@ -29,8 +27,13 @@ type javaBridge struct {
 
 var anyType = types.Type(types.NewInterfaceType(nil, nil).Complete())
 var bridge = &javaBridge{
-	log:      slog.New(discardHandler{}),
 	registry: make(map[uintptr]any),
+}
+
+func (b *javaBridge) Log(values ...any) {
+	if b.log {
+		log.Println(values...)
+	}
 }
 
 func newInterpreter(file, entrypoint string, conf config) (*interp.Interpreter, error) {
@@ -95,28 +98,6 @@ func newInterpreter(file, entrypoint string, conf config) (*interp.Interpreter, 
 	return interp.NewInterpreter(program, mainPackage, interpMode, sizes, file, entrypoint, nil), nil
 }
 
-// ---------------- region: logger
-
-type discardHandler struct{}
-
-func (discardHandler) Enabled(context.Context, slog.Level) bool {
-	return false
-}
-
-func (discardHandler) Handle(context.Context, slog.Record) error {
-	return nil
-}
-
-func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler {
-	return d
-}
-
-func (d discardHandler) WithGroup(string) slog.Handler {
-	return d
-}
-
-// ---------------- region: logger
-
 // ---------------- region: init
 
 func initBridge(file, entrypoint string, debug bool) error {
@@ -130,7 +111,7 @@ func initBridge(file, entrypoint string, debug bool) error {
 		return fmt.Errorf("init interpreter: %w", err)
 	}
 	if debug {
-		bridge.log = slog.Default()
+		bridge.log = true
 	}
 	bridge.javaCalls = 0
 	bridge.goCalls = 0

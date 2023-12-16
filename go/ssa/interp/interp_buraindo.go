@@ -516,7 +516,7 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		return kJump
 
 	case *ssa.Jump:
-		api.Log("Jump")
+		api.Log("Jump", instr, instr.Block().Index, api.GetLastBlock())
 
 		return kJump
 
@@ -569,11 +569,24 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		log.Println("MakeClosure")
 
 	case *ssa.Phi:
-		log.Println("Phi",
+		api.Log("Phi",
+			instr.Name(),
 			instr.String(),
 			instr.Edges,
 			instr.Comment,
+			api.GetLastBlock(),
 		)
+
+		var edge ssa.Value
+		block := api.GetLastBlock()
+		for i, pred := range instr.Block().Preds {
+			if block == pred.Index {
+				edge = instr.Edges[i]
+				break
+			}
+		}
+
+		api.MkVariable(instr.Name(), edge)
 
 	case *ssa.Select:
 		log.Println("Select")
