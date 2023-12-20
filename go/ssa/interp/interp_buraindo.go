@@ -453,7 +453,7 @@ func visitInstr(api Api, instr ssa.Instruction) continuation {
 		log.Println("UnOp")
 
 	case *ssa.BinOp:
-		api.Log("BinOp", instr.X.Name(), instr.Op.String(), instr.Y.Name())
+		api.Log("BinOp", instr.X.Name(), instr.Op.String(), instr.Y.Name(), api.GetLastBlock())
 
 		api.MkBinOp(instr)
 

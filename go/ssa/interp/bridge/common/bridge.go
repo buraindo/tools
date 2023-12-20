@@ -1,7 +1,9 @@
-package main
+package common
 
 import (
+	"bytes"
 	"fmt"
+	"go/token"
 	"go/types"
 	"log"
 	"os"
@@ -16,27 +18,35 @@ import (
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
-type javaBridge struct {
-	log         bool
-	interpreter *interp.Interpreter
-	callGraph   *callgraph.Graph
-	registry    map[uintptr]any
-	goCalls     int
-	javaCalls   int
+type Config struct {
+	DebugLog      bool
+	EnableTracing bool
+	DumpSsa       bool
 }
 
-var anyType = types.Type(types.NewInterfaceType(nil, nil).Complete())
-var bridge = &javaBridge{
+type JavaBridge struct {
+	Interpreter *interp.Interpreter
+	CallGraph   *callgraph.Graph
+	GoCalls     int
+	JavaCalls   int
+
+	log      bool
+	debug    bool
+	registry map[uintptr]any
+}
+
+var AnyType = types.Type(types.NewInterfaceType(nil, nil).Complete())
+var Bridge = &JavaBridge{
 	registry: make(map[uintptr]any),
 }
 
-func (b *javaBridge) Log(values ...any) {
+func (b *JavaBridge) Log(values ...any) {
 	if b.log {
 		log.Println(values...)
 	}
 }
 
-func newInterpreter(file, entrypoint string, conf config) (*interp.Interpreter, error) {
+func NewInterpreter(file, entrypoint string, conf Config) (*interp.Interpreter, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
@@ -59,7 +69,7 @@ func newInterpreter(file, entrypoint string, conf config) (*interp.Interpreter, 
 		packages.NeedEmbedFiles |
 		packages.NeedEmbedPatterns
 	cfg := &packages.Config{Mode: mode}
-	if conf.enableTracing {
+	if conf.EnableTracing {
 		cfg.Logf = log.Printf
 	}
 	initialPackages, err := packages.Load(cfg, file)
@@ -82,7 +92,7 @@ func newInterpreter(file, entrypoint string, conf config) (*interp.Interpreter, 
 		WordSize: 8,
 	}
 	var interpMode interp.Mode
-	if conf.enableTracing {
+	if conf.EnableTracing {
 		interpMode |= interp.EnableTracing
 	}
 
@@ -91,7 +101,7 @@ func newInterpreter(file, entrypoint string, conf config) (*interp.Interpreter, 
 		return nil, fmt.Errorf("error: 0 packages")
 	}
 	mainPackage := mainPackages[0]
-	if conf.dumpSsa {
+	if conf.DumpSsa {
 		dump(mainPackage)
 	}
 
@@ -100,46 +110,55 @@ func newInterpreter(file, entrypoint string, conf config) (*interp.Interpreter, 
 
 // ---------------- region: init
 
-func initBridge(file, entrypoint string, debug bool) error {
+func Init(file, entrypoint string, debug bool) error {
 	var err error
-	bridge.interpreter, err = newInterpreter(file, entrypoint, config{
-		debugLog:      false,
-		enableTracing: false,
-		dumpSsa:       false,
+	Bridge.Interpreter, err = NewInterpreter(file, entrypoint, Config{
+		DebugLog:      false,
+		EnableTracing: false,
+		DumpSsa:       false,
 	})
 	if err != nil {
 		return fmt.Errorf("init interpreter: %w", err)
 	}
 	if debug {
-		bridge.log = true
+		Bridge.log = true
 	}
-	bridge.javaCalls = 0
-	bridge.goCalls = 0
+	Bridge.debug = debug
+	Bridge.JavaCalls = 0
+	Bridge.GoCalls = 0
 
-	program := bridge.interpreter.Program()
+	program := Bridge.Interpreter.Program()
 	// TODO: fix panic with import "reflect"
 	callGraph := vta.CallGraph(ssautil.AllFunctions(program), cha.CallGraph(program))
 	callGraph.DeleteSyntheticNodes()
-	bridge.callGraph = callGraph
+	Bridge.CallGraph = callGraph
 
 	return nil
 }
 
 // ---------------- region: init
 
-// ---------------- region: utils
+// ---------------- region: shutdown
 
-func fromPointer[T any](in uintptr) *T {
-	return bridge.registry[in].(*T)
+func Shutdown() error {
+	return nil
 }
 
-func toPointer[T any](in *T) uintptr {
+// ---------------- region: shutdown
+
+// ---------------- region: utils
+
+func FromPointer[T any](in uintptr) *T {
+	return Bridge.registry[in].(*T)
+}
+
+func ToPointer[T any](in *T) uintptr {
 	out := uintptr(unsafe.Pointer(in))
-	bridge.registry[out] = in
+	Bridge.registry[out] = in
 	return out
 }
 
-func resolveVar(in ssa.Value) string {
+func ResolveVar(in ssa.Value) string {
 	switch in := in.(type) {
 	case *ssa.Parameter:
 		f := in.Parent()
@@ -152,6 +171,17 @@ func resolveVar(in ssa.Value) string {
 		return in.Value.String()
 	}
 	return in.Name()
+}
+
+func dump(mainPackage *ssa.Package) {
+	out := bytes.Buffer{}
+	ssa.WritePackage(&out, mainPackage)
+	for _, object := range mainPackage.Members {
+		if object.Token() == token.FUNC {
+			ssa.WriteFunction(&out, mainPackage.Func(object.Name()))
+		}
+	}
+	fmt.Print(out.String())
 }
 
 // ---------------- region: utils

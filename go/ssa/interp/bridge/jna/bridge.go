@@ -100,29 +100,15 @@ import (
 	"go/token"
 	"go/types"
 	"reflect"
-	"runtime"
 	"strings"
 	"unsafe"
 
 	"tekao.net/jnigi"
 
 	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/interp/bridge/common"
+	"golang.org/x/tools/go/ssa/interp/bridge/jvm"
 )
-
-var jvm *jnigi.JVM
-
-func (b *javaBridge) call(f func(*jnigi.Env) error) error {
-	b.javaCalls++
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	env := jvm.AttachCurrentThread()
-	if err := f(env); err != nil {
-		return fmt.Errorf("call: %w", err)
-	}
-	return nil
-}
 
 // ---------------- region: init
 
@@ -130,13 +116,13 @@ func (b *javaBridge) call(f func(*jnigi.Env) error) error {
 //goland:noinspection GoSnakeCaseUsage
 func JNI_OnLoad(vm *C.JavaVM, _ unsafe.Pointer) C.jint {
 	fmt.Println("go: JNI_OnLoad called")
-	jvm, _ = jnigi.UseJVM(unsafe.Pointer(vm), nil, nil)
+	jvm.Jvm, _ = jnigi.UseJVM(unsafe.Pointer(vm), nil, nil)
 	return C.JNI_VERSION_10
 }
 
 //export initialize
 func initialize(file, entrypoint string, debug bool) C.struct_Result {
-	if err := initBridge(file, entrypoint, debug); err != nil {
+	if err := common.Init(file, entrypoint, debug); err != nil {
 		return C.struct_Result{
 			message: C.CString(err.Error()),
 			code:    1,
@@ -148,24 +134,40 @@ func initialize(file, entrypoint string, debug bool) C.struct_Result {
 
 // ---------------- region: init
 
+// ---------------- region: shutdown
+
+//export shutdown
+func shutdown() C.struct_Result {
+	if err := common.Shutdown(); err != nil {
+		return C.struct_Result{
+			message: C.CString(err.Error()),
+			code:    1,
+		}
+	}
+
+	return C.struct_Result{message: C.CString("successfully shutdown"), code: 0}
+}
+
+// ---------------- region: shutdown
+
 // ---------------- region: machine
 
 //export getMain
 func getMain() C.struct_Method {
-	bridge.goCalls++
-	bridge.Log("getMain out:", toPointer(bridge.interpreter.Main()))
+	common.Bridge.GoCalls++
+	common.Bridge.Log("getMain out:", common.ToPointer(common.Bridge.Interpreter.Main()))
 
-	return toCMethod(bridge.interpreter.Main())
+	return toCMethod(common.Bridge.Interpreter.Main())
 }
 
 //export getMethod
 func getMethod(name string) C.struct_Method {
-	bridge.goCalls++
-	bridge.Log("getMethod in:", name)
+	common.Bridge.GoCalls++
+	common.Bridge.Log("getMethod in:", name)
 
-	method := bridge.interpreter.Package().Func(name)
+	method := common.Bridge.Interpreter.Package().Func(name)
 
-	bridge.Log("getMethod out:", toPointer(method))
+	common.Bridge.Log("getMethod out:", common.ToPointer(method))
 
 	return toCMethod(method)
 }
@@ -176,10 +178,10 @@ func getMethod(name string) C.struct_Method {
 
 //export predecessors
 func predecessors(pointer uintptr) C.struct_Slice {
-	bridge.goCalls++
-	bridge.Log("predecessors in:", pointer)
+	common.Bridge.GoCalls++
+	common.Bridge.Log("predecessors in:", pointer)
 
-	inst := *fromPointer[ssa.Instruction](pointer)
+	inst := *common.FromPointer[ssa.Instruction](pointer)
 	out := make([]*ssa.Instruction, 0)
 	block := inst.Block()
 
@@ -195,17 +197,17 @@ func predecessors(pointer uintptr) C.struct_Slice {
 		out = append(out, &block.Instrs[i])
 	}
 
-	bridge.Log("predecessors out:", toInstructionString(out))
+	common.Bridge.Log("predecessors out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
 
 //export successors
 func successors(pointer uintptr) C.struct_Slice {
-	bridge.goCalls++
-	bridge.Log("successors in:", pointer, *fromPointer[ssa.Instruction](pointer))
+	common.Bridge.GoCalls++
+	common.Bridge.Log("successors in:", pointer, *common.FromPointer[ssa.Instruction](pointer))
 
-	inst := *fromPointer[ssa.Instruction](pointer)
+	inst := *common.FromPointer[ssa.Instruction](pointer)
 	if inst == nil {
 		return emptyCSlice()
 	}
@@ -233,17 +235,17 @@ func successors(pointer uintptr) C.struct_Slice {
 		}
 	}
 
-	bridge.Log("successors out:", toInstructionString(out))
+	common.Bridge.Log("successors out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
 
 //export callees
 func callees(pointer uintptr) C.struct_Slice {
-	bridge.goCalls++
-	bridge.Log("callees in:", pointer)
+	common.Bridge.GoCalls++
+	common.Bridge.Log("callees in:", pointer)
 
-	inst := *fromPointer[ssa.Instruction](pointer)
+	inst := *common.FromPointer[ssa.Instruction](pointer)
 	out := make([]*ssa.Function, 0)
 
 	call, ok := inst.(ssa.CallInstruction)
@@ -251,7 +253,7 @@ func callees(pointer uintptr) C.struct_Slice {
 		return emptyCSlice()
 	}
 	if call.Common().IsInvoke() {
-		program := bridge.interpreter.Program()
+		program := common.Bridge.Interpreter.Program()
 		callCommon := call.Common()
 		typ := callCommon.Value.Type()
 		pkg := callCommon.Method.Pkg()
@@ -261,18 +263,18 @@ func callees(pointer uintptr) C.struct_Slice {
 		out = append(out, call.Common().StaticCallee())
 	}
 
-	bridge.Log("callees out:", toMethodString(out))
+	common.Bridge.Log("callees out:", toMethodString(out))
 
 	return toCSlice(out, toCMethod, C.sizeof_struct_Method)
 }
 
 //export callers
 func callers(pointer uintptr) C.struct_Slice {
-	bridge.goCalls++
-	bridge.Log("callers in:", pointer)
+	common.Bridge.GoCalls++
+	common.Bridge.Log("callers in:", pointer)
 
-	function := fromPointer[ssa.Function](pointer)
-	in := bridge.callGraph.Nodes[function].In
+	function := common.FromPointer[ssa.Function](pointer)
+	in := common.Bridge.CallGraph.Nodes[function].In
 	out := make([]*ssa.Instruction, 0, len(in))
 
 	for i := range in {
@@ -280,30 +282,30 @@ func callers(pointer uintptr) C.struct_Slice {
 		out = append(out, &inst)
 	}
 
-	bridge.Log("callers out:", toInstructionString(out))
+	common.Bridge.Log("callers out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
 
 //export entryPoints
 func entryPoints(pointer uintptr) C.struct_Slice {
-	bridge.goCalls++
-	bridge.Log("entryPoints in:", pointer)
+	common.Bridge.GoCalls++
+	common.Bridge.Log("entryPoints in:", pointer)
 
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 	out := []*ssa.Instruction{&function.Blocks[0].Instrs[0]}
 
-	bridge.Log("entryPoints out:", toInstructionString(out))
+	common.Bridge.Log("entryPoints out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
 
 //export exitPoints
 func exitPoints(pointer uintptr) C.struct_Slice {
-	bridge.goCalls++
-	bridge.Log("exitPoints in:", pointer)
+	common.Bridge.GoCalls++
+	common.Bridge.Log("exitPoints in:", pointer)
 
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 	out := make([]*ssa.Instruction, 0)
 
 	for _, b := range function.Blocks {
@@ -315,29 +317,29 @@ func exitPoints(pointer uintptr) C.struct_Slice {
 		}
 	}
 
-	bridge.Log("exitPoints out:", toInstructionString(out))
+	common.Bridge.Log("exitPoints out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
 
 //export methodOf
 func methodOf(pointer uintptr) C.struct_Method {
-	bridge.goCalls++
-	bridge.Log("methodOf in:", pointer)
+	common.Bridge.GoCalls++
+	common.Bridge.Log("methodOf in:", pointer)
 
-	method := (*fromPointer[ssa.Instruction](pointer)).Parent()
+	method := (*common.FromPointer[ssa.Instruction](pointer)).Parent()
 
-	bridge.Log("methodOf out:", toPointer(method), method.Name())
+	common.Bridge.Log("methodOf out:", common.ToPointer(method), method.Name())
 
 	return toCMethod(method)
 }
 
 //export statementsOf
 func statementsOf(pointer uintptr) C.struct_Slice {
-	bridge.goCalls++
-	bridge.Log("statementsOf in:", pointer)
+	common.Bridge.GoCalls++
+	common.Bridge.Log("statementsOf in:", pointer)
 
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 	out := make([]*ssa.Instruction, 0)
 
 	for _, b := range function.Blocks {
@@ -346,7 +348,7 @@ func statementsOf(pointer uintptr) C.struct_Slice {
 		}
 	}
 
-	bridge.Log("statementsOf out:", toInstructionString(out))
+	common.Bridge.Log("statementsOf out:", toInstructionString(out))
 
 	return toCSlice(out, toCInstruction, C.sizeof_struct_Instruction)
 }
@@ -357,23 +359,23 @@ func statementsOf(pointer uintptr) C.struct_Slice {
 
 //export getAnyType
 func getAnyType() C.struct_Type {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
-	return toCType(&anyType)
+	return toCType(&common.AnyType)
 }
 
 //export findSubTypes
 func findSubTypes(pointer uintptr) C.struct_Slice {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
-	t := *fromPointer[types.Type](pointer)
+	t := *common.FromPointer[types.Type](pointer)
 	if !types.IsInterface(t) {
 		return emptyCSlice()
 	}
 
 	i := t.(*types.Interface).Complete()
 	out := make([]*types.Type, 0)
-	allTypes := bridge.interpreter.Types()
+	allTypes := common.Bridge.Interpreter.Types()
 	for j, v := range allTypes {
 		if !types.Implements(v, i) {
 			continue
@@ -385,9 +387,9 @@ func findSubTypes(pointer uintptr) C.struct_Slice {
 
 //export isInstantiable
 func isInstantiable(pointer uintptr) C.bool {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
-	t := *fromPointer[types.Type](pointer)
+	t := *common.FromPointer[types.Type](pointer)
 	// TODO: maybe channels also need to be considered not instantiable
 	result := !types.IsInterface(t)
 	return C.bool(result)
@@ -395,21 +397,21 @@ func isInstantiable(pointer uintptr) C.bool {
 
 //export isFinal
 func isFinal(pointer uintptr) C.bool {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
-	t := *fromPointer[types.Type](pointer)
+	t := *common.FromPointer[types.Type](pointer)
 	result := !types.IsInterface(t)
 	return C.bool(result)
 }
 
 //export hasCommonSubtype
 func hasCommonSubtype(pointer uintptr, other []C.struct_Type) C.bool {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
 	allTypes := make([]types.Type, 0, len(other)+1)
-	allTypes = append(allTypes, *fromPointer[types.Type](pointer))
+	allTypes = append(allTypes, *common.FromPointer[types.Type](pointer))
 	for _, t := range other {
-		allTypes = append(allTypes, *fromPointer[types.Type](uintptr(t.pointer)))
+		allTypes = append(allTypes, *common.FromPointer[types.Type](uintptr(t.pointer)))
 	}
 
 	result := true
@@ -424,9 +426,9 @@ func hasCommonSubtype(pointer uintptr, other []C.struct_Type) C.bool {
 
 //export isSupertype
 func isSupertype(supertypePointer, typePointer uintptr) C.bool {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
-	t, v := *fromPointer[types.Type](supertypePointer), *fromPointer[types.Type](typePointer)
+	t, v := *common.FromPointer[types.Type](supertypePointer), *common.FromPointer[types.Type](typePointer)
 	result := types.Identical(v, t) || types.AssignableTo(v, t)
 	return C.bool(result)
 }
@@ -442,11 +444,11 @@ type MethodInfo struct {
 
 //export methodInfo
 func methodInfo(pointer uintptr) C.struct_MethodInfo {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
-	bridge.Log("methodInfo in:", pointer)
+	common.Bridge.Log("methodInfo in:", pointer)
 
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 
 	out := &MethodInfo{}
 	for range function.Params {
@@ -461,7 +463,7 @@ func methodInfo(pointer uintptr) C.struct_MethodInfo {
 		}
 	}
 
-	bridge.Log("methodInfo out:", toMethodInfoString([]*MethodInfo{out}))
+	common.Bridge.Log("methodInfo out:", toMethodInfoString([]*MethodInfo{out}))
 
 	return toCMethodInfo(out)
 }
@@ -475,16 +477,16 @@ type JnaApi struct {
 }
 
 func (a *JnaApi) MkIntRegisterReading(name string, idx int) {
-	bridge.javaCalls++
+	common.Bridge.JavaCalls++
 
 	C.callMkIntRegisterReading(a.api.mkIntRegisterReading, C.CString(name), C.int(idx))
 }
 
 func (a *JnaApi) MkBinOp(inst *ssa.BinOp) {
-	bridge.javaCalls++
+	common.Bridge.JavaCalls++
 
-	fst := resolveVar(inst.X)
-	snd := resolveVar(inst.Y)
+	fst := common.ResolveVar(inst.X)
+	snd := common.ResolveVar(inst.Y)
 	name := inst.Name()
 	switch inst.Op {
 	case token.LSS:
@@ -493,24 +495,25 @@ func (a *JnaApi) MkBinOp(inst *ssa.BinOp) {
 		C.callMkBinOp(a.api.mkGreater, C.CString(name), C.CString(fst), C.CString(snd))
 	case token.ADD:
 		C.callMkBinOp(a.api.mkAdd, C.CString(name), C.CString(fst), C.CString(snd))
+	default:
 	}
 }
 
 func (a *JnaApi) MkIf(expr string, pos, neg *ssa.Instruction) {
-	bridge.javaCalls++
+	common.Bridge.JavaCalls++
 
 	C.callMkIf(a.api.mkIf, C.CString(expr), toCInstruction(pos), toCInstruction(neg))
 }
 
 func (a *JnaApi) MkReturn(value ssa.Value) {
-	bridge.javaCalls++
+	common.Bridge.JavaCalls++
 
-	name := resolveVar(value)
+	name := common.ResolveVar(value)
 	C.callMkReturn(a.api.mkReturn, C.CString(name))
 }
 
 func (a *JnaApi) MkVariable(name string, value ssa.Value) {
-	valueName := resolveVar(value)
+	valueName := common.ResolveVar(value)
 	C.callMkVariable(a.api.mkVariable, C.CString(name), C.CString(valueName))
 }
 
@@ -523,22 +526,22 @@ func (a *JnaApi) SetLastBlock(block int) {
 }
 
 func (a *JnaApi) Log(values ...any) {
-	bridge.Log(values...)
+	common.Bridge.Log(values...)
 }
 
 //export start
 func start(javaApi C.struct_Api) C.int {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
-	return C.int(bridge.interpreter.Start(&JnaApi{api: javaApi}))
+	return C.int(common.Bridge.Interpreter.Start(&JnaApi{api: javaApi}))
 }
 
 //export step
 func step(javaApi C.struct_Api, pointer uintptr) C.struct_Instruction {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
-	inst := *fromPointer[ssa.Instruction](pointer)
-	out := bridge.interpreter.Step(&JnaApi{api: javaApi}, inst)
+	inst := *common.FromPointer[ssa.Instruction](pointer)
+	out := common.Bridge.Interpreter.Step(&JnaApi{api: javaApi}, inst)
 	if out == nil {
 		return C.struct_Instruction{
 			pointer:   C.size_t(0),
@@ -574,14 +577,14 @@ func toCSlice[T, R any](in []T, mapper func(T) R, size C.size_t) C.struct_Slice 
 
 func toCInstruction(in *ssa.Instruction) C.struct_Instruction {
 	return C.struct_Instruction{
-		pointer:   C.size_t(toPointer(in)),
+		pointer:   C.size_t(common.ToPointer(in)),
 		statement: C.CString((*in).String()),
 	}
 }
 
 func toCMethod(in *ssa.Function) C.struct_Method {
 	return C.struct_Method{
-		pointer: C.size_t(toPointer(in)),
+		pointer: C.size_t(common.ToPointer(in)),
 		name:    C.CString(in.Name()),
 	}
 }
@@ -595,7 +598,7 @@ func toCMethodInfo(in *MethodInfo) C.struct_MethodInfo {
 
 func toCType(in *types.Type) C.struct_Type {
 	return C.struct_Type{
-		pointer: C.size_t(toPointer(in)),
+		pointer: C.size_t(common.ToPointer(in)),
 		name:    C.CString((*in).String()),
 	}
 }
@@ -603,7 +606,7 @@ func toCType(in *types.Type) C.struct_Type {
 func toInstructionString(in []*ssa.Instruction) string {
 	out := make([]string, 0, len(in))
 	for i := range in {
-		pointer := C.size_t(toPointer(in[i]))
+		pointer := C.size_t(common.ToPointer(in[i]))
 		out = append(out, fmt.Sprintf("%v %s", pointer, (*in[i]).String()))
 	}
 	return strings.Join(out, "; ")
@@ -612,7 +615,7 @@ func toInstructionString(in []*ssa.Instruction) string {
 func toMethodString(in []*ssa.Function) string {
 	out := make([]string, 0, len(in))
 	for i := range in {
-		pointer := C.size_t(toPointer(in[i]))
+		pointer := C.size_t(common.ToPointer(in[i]))
 		out = append(out, fmt.Sprintf("%v %s", pointer, in[i].Name()))
 	}
 	return strings.Join(out, "; ")
@@ -632,17 +635,17 @@ func toMethodInfoString(in []*MethodInfo) string {
 
 //export getCalls
 func getCalls() int {
-	return bridge.goCalls + bridge.javaCalls
+	return common.Bridge.GoCalls + common.Bridge.JavaCalls
 }
 
 //export inc
 func inc() {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 }
 
 //export interpreter
 func interpreter() C.struct_Interpreter {
-	name := bridge.interpreter.File()
+	name := common.Bridge.Interpreter.File()
 	return C.struct_Interpreter{name: C.CString(name)}
 }
 
@@ -655,7 +658,7 @@ func hello() {
 //export talk
 func talk() C.struct_Result {
 	out := C.struct_Result{message: C.CString("talk done"), code: 0}
-	err := bridge.call(func(env *jnigi.Env) error {
+	err := jvm.JavaCall(func(env *jnigi.Env) error {
 		return env.CallStaticMethod("org/usvm/bridge/GoBridge", "increase", nil)
 	})
 	if err != nil {
@@ -669,28 +672,28 @@ func talk() C.struct_Result {
 
 //export getBridge
 func getBridge() uintptr {
-	return toPointer(bridge)
+	return common.ToPointer(common.Bridge)
 }
 
 //export getBridgeCalls
 func getBridgeCalls(pointer uintptr) int {
-	return fromPointer[javaBridge](pointer).goCalls
+	return common.FromPointer[common.JavaBridge](pointer).GoCalls
 }
 
 //export getMainPointer
 func getMainPointer() uintptr {
-	return toPointer(bridge.interpreter.Main())
+	return common.ToPointer(common.Bridge.Interpreter.Main())
 }
 
 //export getMethodName
 func getMethodName(pointer uintptr) *C.char {
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 	return C.CString(function.Name())
 }
 
 //export countStatementsOf
 func countStatementsOf(pointer uintptr) int {
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 	out := make([]C.struct_Instruction, 0)
 	for _, b := range function.Blocks {
 		for _, i := range b.Instrs {
@@ -702,17 +705,17 @@ func countStatementsOf(pointer uintptr) int {
 
 //export methods
 func methods() *C.struct_Method {
-	functions := []*ssa.Function{bridge.interpreter.Main(), bridge.interpreter.Init()}
+	functions := []*ssa.Function{common.Bridge.Interpreter.Main(), common.Bridge.Interpreter.Init()}
 	length := C.size_t(len(functions))
 	var out *C.struct_Method = (*C.struct_Method)(C.malloc(length * C.sizeof_struct_Method))
 	values := unsafe.Slice(out, len(functions))
 	for i, f := range functions {
 		values[i] = C.struct_Method{
-			pointer: C.size_t(toPointer(f)),
+			pointer: C.size_t(common.ToPointer(f)),
 			name:    C.CString(f.Name()),
 		}
 	}
-	bridge.Log("methods out:", toMethodString(functions))
+	common.Bridge.Log("methods out:", toMethodString(functions))
 	return out
 }
 
@@ -726,8 +729,8 @@ func slice() C.struct_Slice {
 
 //export methodsSlice
 func methodsSlice() C.struct_Slice {
-	out := []*ssa.Function{bridge.interpreter.Main(), bridge.interpreter.Init()}
-	bridge.Log("methods out:", toMethodString(out))
+	out := []*ssa.Function{common.Bridge.Interpreter.Main(), common.Bridge.Interpreter.Init()}
+	common.Bridge.Log("methods out:", toMethodString(out))
 	return toCSlice(out, toCMethod, C.sizeof_struct_Method)
 }
 
@@ -736,7 +739,7 @@ func callJavaMethod(obj C.struct_Object) {
 	className := C.GoString(obj.className)
 	fmt.Println("classname in:", className, uintptr(obj.pointer))
 	object := jnigi.WrapJObject(uintptr(obj.pointer), className, bool(obj.isArray))
-	err := bridge.call(func(env *jnigi.Env) error {
+	err := jvm.JavaCall(func(env *jnigi.Env) error {
 		return object.CallMethod(env, "printHello", nil)
 	})
 	if err != nil {
@@ -746,15 +749,15 @@ func callJavaMethod(obj C.struct_Object) {
 
 //export frameStep
 func frameStep(javaApi C.struct_Api) C.bool {
-	return C.bool(bridge.interpreter.FrameStep(&JnaApi{api: javaApi}))
+	return C.bool(common.Bridge.Interpreter.FrameStep(&JnaApi{api: javaApi}))
 }
 
 //export stepRef
 func stepRef(obj C.struct_Object) C.bool {
-	bridge.goCalls++
+	common.Bridge.GoCalls++
 
 	object := jnigi.WrapJObject(uintptr(obj.pointer), C.GoString(obj.className), bool(obj.isArray))
-	err := bridge.call(func(env *jnigi.Env) error {
+	err := jvm.JavaCall(func(env *jnigi.Env) error {
 		return object.CallMethod(env, "mkBvRegisterReading", nil, 0)
 	})
 	if err != nil {
@@ -764,12 +767,17 @@ func stepRef(obj C.struct_Object) C.bool {
 	return C.bool(true)
 }
 
+//export getNumber
+func getNumber() C.int {
+	return C.int(53)
+}
+
 // ---------------- region: test
 
 func testMax2() {
 	initialize("/home/buraindo/programs/max2.go", "main", true)
 
-	for _, t := range bridge.interpreter.Types() {
+	for _, t := range common.Bridge.Interpreter.Types() {
 		fmt.Println(t.String())
 	}
 
@@ -789,13 +797,18 @@ func testTypes() {
 
 	t := getAnyType()
 	fmt.Println(uintptr(t.pointer), C.GoString(t.name))
-	v := types.Type(types.NewInterfaceType([]*types.Func{bridge.interpreter.Main().Object().(*types.Func)}, nil))
-	fmt.Println(isSupertype(uintptr(t.pointer), toPointer(&v)))
-	fmt.Println(isSupertype(toPointer(&v), uintptr(t.pointer)))
+	v := types.Type(types.NewInterfaceType([]*types.Func{common.Bridge.Interpreter.Main().Object().(*types.Func)}, nil))
+	fmt.Println(isSupertype(uintptr(t.pointer), common.ToPointer(&v)))
+	fmt.Println(isSupertype(common.ToPointer(&v), uintptr(t.pointer)))
 	fmt.Println(hasCommonSubtype(uintptr(t.pointer), []C.struct_Type{t, t}))
 	subtypes := findSubTypes(uintptr(t.pointer))
 	subtypesArray := (*(*[3]C.struct_Type)(subtypes.data))[:3:3]
 	for i := range subtypesArray {
 		fmt.Println(uintptr(subtypesArray[i].pointer), C.GoString(subtypesArray[i].name))
 	}
+}
+
+func main() {
+	testMax2()
+	testTypes()
 }

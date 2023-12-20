@@ -1,16 +1,5 @@
 package main
 
-import (
-	"go/token"
-	"go/types"
-	"reflect"
-	"unsafe"
-
-	"tekao.net/jnigi"
-
-	"golang.org/x/tools/go/ssa"
-)
-
 /*
 #include <jni.h>
 
@@ -32,6 +21,18 @@ static jintArray ToIntArray(JNIEnv* env, jsize len, jint* buf) {
 */
 import "C"
 
+import (
+	"go/token"
+	"go/types"
+	"reflect"
+	"unsafe"
+
+	"tekao.net/jnigi"
+
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/interp/bridge/common"
+)
+
 var api = &JniApi{}
 
 // ---------------- region: initialize
@@ -42,13 +43,13 @@ func Java_org_usvm_bridge_JniBridge_initialize(
 	_ C.jobject,
 	fileC, entrypointC C.jbyteArray,
 	debugC C.jboolean,
-) C.jlong {
+) C.jint {
 	env := toEnv(envC)
 	file := toString(env, fileC)
 	entrypoint := toString(env, entrypointC)
 	debug := toBool(debugC)
 
-	if err := initBridge(file, entrypoint, debug); err != nil {
+	if err := common.Init(file, entrypoint, debug); err != nil {
 		return 1
 	}
 	return 0
@@ -56,11 +57,27 @@ func Java_org_usvm_bridge_JniBridge_initialize(
 
 // ---------------- region: initialize
 
+// ---------------- region: shutdown
+
+//export Java_org_usvm_bridge_JniBridge_shutdown
+func Java_org_usvm_bridge_JniBridge_shutdown(
+	envC *C.JNIEnv,
+	_ C.jobject,
+) C.jint {
+	if err := common.Shutdown(); err != nil {
+		return 1
+	}
+
+	return 0
+}
+
+// ---------------- region: shutdown
+
 // ---------------- region: machine
 
 //export Java_org_usvm_bridge_JniBridge_getMain
 func Java_org_usvm_bridge_JniBridge_getMain() C.jlong {
-	return C.jlong(toPointer(bridge.interpreter.Main()))
+	return C.jlong(common.ToPointer(common.Bridge.Interpreter.Main()))
 }
 
 //export Java_org_usvm_bridge_JniBridge_getMethod
@@ -70,8 +87,8 @@ func Java_org_usvm_bridge_JniBridge_getMethod(
 	nameC C.jbyteArray,
 ) C.jlong {
 	name := toString(toEnv(envC), nameC)
-	method := bridge.interpreter.Package().Func(name)
-	return C.jlong(toPointer(method))
+	method := common.Bridge.Interpreter.Package().Func(name)
+	return C.jlong(common.ToPointer(method))
 }
 
 // ---------------- region: machine
@@ -84,20 +101,20 @@ func Java_org_usvm_bridge_JniBridge_predecessors(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlongArray {
-	inst := *fromPointer[ssa.Instruction](pointer)
+	inst := *common.FromPointer[ssa.Instruction](pointer)
 	out := make([]uintptr, 0)
 	block := inst.Block()
 
 	for _, b := range block.Preds {
-		for _, i := range b.Instrs {
-			out = append(out, toPointer(&i))
+		for i := range b.Instrs {
+			out = append(out, common.ToPointer(&b.Instrs[i]))
 		}
 	}
 	for i := range block.Instrs {
 		if block.Instrs[i] == inst {
 			break
 		}
-		out = append(out, toPointer(&block.Instrs[i]))
+		out = append(out, common.ToPointer(&block.Instrs[i]))
 	}
 
 	return toJLongArray(envC, out)
@@ -109,7 +126,7 @@ func Java_org_usvm_bridge_JniBridge_successors(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlongArray {
-	inst := *fromPointer[ssa.Instruction](pointer)
+	inst := *common.FromPointer[ssa.Instruction](pointer)
 	if inst == nil {
 		return 0
 	}
@@ -122,18 +139,17 @@ func Java_org_usvm_bridge_JniBridge_successors(
 
 	k := 0
 	for j, i := range block.Instrs {
-		if i != inst {
-			continue
+		if i == inst {
+			k = j
+			break
 		}
-		k = j
-		break
 	}
 	for i := k + 1; i < len(block.Instrs); i++ {
-		out = append(out, toPointer(&block.Instrs[i]))
+		out = append(out, common.ToPointer(&block.Instrs[i]))
 	}
 	for _, b := range block.Succs {
 		for i := range b.Instrs {
-			out = append(out, toPointer(&b.Instrs[i]))
+			out = append(out, common.ToPointer(&b.Instrs[i]))
 		}
 	}
 
@@ -146,7 +162,7 @@ func Java_org_usvm_bridge_JniBridge_callees(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlongArray {
-	inst := *fromPointer[ssa.Instruction](pointer)
+	inst := *common.FromPointer[ssa.Instruction](pointer)
 	out := make([]uintptr, 0)
 
 	call, ok := inst.(ssa.CallInstruction)
@@ -154,14 +170,14 @@ func Java_org_usvm_bridge_JniBridge_callees(
 		return 0
 	}
 	if call.Common().IsInvoke() {
-		program := bridge.interpreter.Program()
+		program := common.Bridge.Interpreter.Program()
 		callCommon := call.Common()
 		typ := callCommon.Value.Type()
 		pkg := callCommon.Method.Pkg()
 		name := callCommon.Method.Name()
-		out = append(out, toPointer(program.LookupMethod(typ, pkg, name)))
+		out = append(out, common.ToPointer(program.LookupMethod(typ, pkg, name)))
 	} else {
-		out = append(out, toPointer(call.Common().StaticCallee()))
+		out = append(out, common.ToPointer(call.Common().StaticCallee()))
 	}
 
 	return toJLongArray(envC, out)
@@ -173,13 +189,13 @@ func Java_org_usvm_bridge_JniBridge_callers(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlongArray {
-	function := fromPointer[ssa.Function](pointer)
-	in := bridge.callGraph.Nodes[function].In
+	function := common.FromPointer[ssa.Function](pointer)
+	in := common.Bridge.CallGraph.Nodes[function].In
 	out := make([]uintptr, 0, len(in))
 
 	for i := range in {
 		inst := in[i].Site.(ssa.Instruction)
-		out = append(out, toPointer(&inst))
+		out = append(out, common.ToPointer(&inst))
 	}
 
 	return toJLongArray(envC, out)
@@ -191,8 +207,8 @@ func Java_org_usvm_bridge_JniBridge_entryPoints(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlongArray {
-	function := fromPointer[ssa.Function](pointer)
-	out := []uintptr{toPointer(&function.Blocks[0].Instrs[0])}
+	function := common.FromPointer[ssa.Function](pointer)
+	out := []uintptr{common.ToPointer(&function.Blocks[0].Instrs[0])}
 
 	return toJLongArray(envC, out)
 }
@@ -203,14 +219,14 @@ func Java_org_usvm_bridge_JniBridge_exitPoints(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlongArray {
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 	out := make([]uintptr, 0)
 
 	for _, b := range function.Blocks {
 		for i := range b.Instrs {
 			switch b.Instrs[i].(type) {
 			case *ssa.Return, *ssa.Panic:
-				out = append(out, toPointer(&b.Instrs[i]))
+				out = append(out, common.ToPointer(&b.Instrs[i]))
 			}
 		}
 	}
@@ -224,8 +240,8 @@ func Java_org_usvm_bridge_JniBridge_methodOf(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlong {
-	method := (*fromPointer[ssa.Instruction](pointer)).Parent()
-	return C.jlong(toPointer(method))
+	method := (*common.FromPointer[ssa.Instruction](pointer)).Parent()
+	return C.jlong(common.ToPointer(method))
 }
 
 //export Java_org_usvm_bridge_JniBridge_statementsOf
@@ -234,12 +250,12 @@ func Java_org_usvm_bridge_JniBridge_statementsOf(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlongArray {
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 	out := make([]uintptr, 0)
 
 	for _, b := range function.Blocks {
 		for i := range b.Instrs {
-			out = append(out, toPointer(&b.Instrs[i]))
+			out = append(out, common.ToPointer(&b.Instrs[i]))
 		}
 	}
 
@@ -252,7 +268,7 @@ func Java_org_usvm_bridge_JniBridge_statementsOf(
 
 //export Java_org_usvm_bridge_JniBridge_getAnyType
 func Java_org_usvm_bridge_JniBridge_getAnyType() C.jlong {
-	return C.jlong(toPointer(&anyType))
+	return C.jlong(common.ToPointer(&common.AnyType))
 }
 
 //export Java_org_usvm_bridge_JniBridge_findSubTypes
@@ -261,19 +277,19 @@ func Java_org_usvm_bridge_JniBridge_findSubTypes(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jlongArray {
-	t := *fromPointer[types.Type](pointer)
+	t := *common.FromPointer[types.Type](pointer)
 	if !types.IsInterface(t) {
 		return 0
 	}
 
 	i := t.(*types.Interface).Complete()
 	out := make([]uintptr, 0)
-	allTypes := bridge.interpreter.Types()
+	allTypes := common.Bridge.Interpreter.Types()
 	for j, v := range allTypes {
 		if !types.Implements(v, i) {
 			continue
 		}
-		out = append(out, toPointer(&allTypes[j]))
+		out = append(out, common.ToPointer(&allTypes[j]))
 	}
 
 	return toJLongArray(envC, out)
@@ -285,7 +301,7 @@ func Java_org_usvm_bridge_JniBridge_isInstantiable(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jboolean {
-	t := *fromPointer[types.Type](pointer)
+	t := *common.FromPointer[types.Type](pointer)
 	// TODO: maybe channels also need to be considered not instantiable
 	result := !types.IsInterface(t)
 	return toJBool(result)
@@ -297,7 +313,7 @@ func Java_org_usvm_bridge_JniBridge_isFinal(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jboolean {
-	t := *fromPointer[types.Type](pointer)
+	t := *common.FromPointer[types.Type](pointer)
 	result := !types.IsInterface(t)
 	return toJBool(result)
 }
@@ -311,9 +327,9 @@ func Java_org_usvm_bridge_JniBridge_hasCommonSubtype(
 	otherLen C.jint,
 ) C.jboolean {
 	allTypes := make([]types.Type, 0, 20)
-	allTypes = append(allTypes, *fromPointer[types.Type](pointer))
+	allTypes = append(allTypes, *common.FromPointer[types.Type](pointer))
 	for _, t := range toUintptrArray(envC, int(otherLen), other) {
-		allTypes = append(allTypes, *fromPointer[types.Type](t))
+		allTypes = append(allTypes, *common.FromPointer[types.Type](t))
 	}
 
 	result := true
@@ -332,7 +348,7 @@ func Java_org_usvm_bridge_JniBridge_isSupertype(
 	_ C.jobject,
 	supertypePointer, typePointer uintptr,
 ) C.jboolean {
-	t, v := *fromPointer[types.Type](supertypePointer), *fromPointer[types.Type](typePointer)
+	t, v := *common.FromPointer[types.Type](supertypePointer), *common.FromPointer[types.Type](typePointer)
 	result := types.Identical(v, t) || types.AssignableTo(v, t)
 	return toJBool(result)
 }
@@ -347,7 +363,7 @@ func Java_org_usvm_bridge_JniBridge_methodInfo(
 	_ C.jobject,
 	pointer uintptr,
 ) C.jintArray {
-	function := fromPointer[ssa.Function](pointer)
+	function := common.FromPointer[ssa.Function](pointer)
 	parametersCount, localsCount := 0, len(function.Locals)
 	for range function.Params {
 		parametersCount++
@@ -380,8 +396,8 @@ func (a *JniApi) MkIntRegisterReading(_ string, idx int) {
 
 func (a *JniApi) MkBinOp(inst *ssa.BinOp) {
 	name := []byte(inst.Name())
-	fst := []byte(resolveVar(inst.X))
-	snd := []byte(resolveVar(inst.Y))
+	fst := []byte(common.ResolveVar(inst.X))
+	snd := []byte(common.ResolveVar(inst.Y))
 	var err error
 	switch inst.Op {
 	case token.LSS:
@@ -390,6 +406,7 @@ func (a *JniApi) MkBinOp(inst *ssa.BinOp) {
 		err = a.this.CallMethod(a.env, "mkGreater", nil, name, fst, snd)
 	case token.ADD:
 		err = a.this.CallMethod(a.env, "mkAdd", nil, name, fst, snd)
+	default:
 	}
 	if err != nil {
 		a.Log("MkBinOp error", err.Error())
@@ -398,22 +415,22 @@ func (a *JniApi) MkBinOp(inst *ssa.BinOp) {
 
 func (a *JniApi) MkIf(expr string, pos, neg *ssa.Instruction) {
 	exprC := []byte(expr)
-	posC := int64(toPointer(pos))
-	negC := int64(toPointer(neg))
+	posC := int64(common.ToPointer(pos))
+	negC := int64(common.ToPointer(neg))
 	if err := a.this.CallMethod(a.env, "mkIf", nil, exprC, posC, negC); err != nil {
 		a.Log("MkIf error", err.Error())
 	}
 }
 
 func (a *JniApi) MkReturn(value ssa.Value) {
-	name := resolveVar(value)
+	name := common.ResolveVar(value)
 	if err := a.this.CallMethod(a.env, "mkReturn", nil, []byte(name)); err != nil {
 		a.Log("MkReturn error", err.Error())
 	}
 }
 
 func (a *JniApi) MkVariable(name string, value ssa.Value) {
-	valueName := resolveVar(value)
+	valueName := common.ResolveVar(value)
 	if err := a.this.CallMethod(a.env, "mkVariable", nil, []byte(name), []byte(valueName)); err != nil {
 		a.Log("MkVariable error", err.Error())
 	}
@@ -440,7 +457,7 @@ func (a *JniApi) With(env *C.JNIEnv, this C.jobject) *JniApi {
 }
 
 func (a *JniApi) Log(values ...any) {
-	bridge.Log(values...)
+	common.Bridge.Log(values...)
 }
 
 //export Java_org_usvm_bridge_JniBridge_start
@@ -448,7 +465,7 @@ func Java_org_usvm_bridge_JniBridge_start(
 	env *C.JNIEnv,
 	this C.jobject,
 ) C.int {
-	return C.int(bridge.interpreter.Start(api.With(env, this)))
+	return C.int(common.Bridge.Interpreter.Start(api.With(env, this)))
 }
 
 //export Java_org_usvm_bridge_JniBridge_step
@@ -457,12 +474,12 @@ func Java_org_usvm_bridge_JniBridge_step(
 	this C.jobject,
 	pointer uintptr,
 ) C.jlong {
-	inst := *fromPointer[ssa.Instruction](pointer)
-	out := bridge.interpreter.Step(api.With(env, this), inst)
+	inst := *common.FromPointer[ssa.Instruction](pointer)
+	out := common.Bridge.Interpreter.Step(api.With(env, this), inst)
 	if out == nil {
 		return 0
 	}
-	return C.jlong(toPointer(out))
+	return C.jlong(common.ToPointer(out))
 }
 
 // ---------------- region: api
@@ -570,7 +587,7 @@ func Java_org_usvm_bridge_JniBridge_initialize2(
 		return 1
 	}
 	debug := toBool(debugC)
-	if err = initBridge(file, entrypoint, debug); err != nil {
+	if err = common.Init(file, entrypoint, debug); err != nil {
 		return 1
 	}
 	return 0
@@ -588,3 +605,5 @@ func jstringToString(env *jnigi.Env, s C.jstring) (string, error) {
 }
 
 // ---------------- region test
+
+func main() {}
