@@ -12,7 +12,7 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
 	libs=/Users/e.k.ibragimov/Documents/University/MastersDiploma/libs
 fi
 
-export CGO_CFLAGS="-I ${folder} -I ${folder}/${osdir}"
+export CGO_CFLAGS="-I ${folder} -I ${folder}/${osdir} -O2"
+go build -o ${libs}/java_nalim_bridge.so -buildmode=c-shared nalim/bridge.go
 go build -o ${libs}/java_jna_bridge.so -buildmode=c-shared jna/bridge.go
 go build -o ${libs}/java_jni_bridge.so -buildmode=c-shared jni/bridge.go
-go build -o ${libs}/java_nalim_bridge.so -buildmode=c-shared nalim/bridge.go

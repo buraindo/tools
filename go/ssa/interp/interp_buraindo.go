@@ -1,48 +1,4 @@
-// Copyright 2013 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
-// Package ssa/interp defines an interpreter for the SSA
-// representation of Go programs.
-//
-// This interpreter is provided as an adjunct for testing the SSA
-// construction algorithm.  Its purpose is to provide a minimal
-// metacircular implementation of the dynamic semantics of each SSA
-// instruction.  It is not, and will never be, a production-quality Go
-// interpreter.
-//
-// The following is a partial list of Go features that are currently
-// unsupported or incomplete in the interpreter.
-//
-// * Unsafe operations, including all uses of unsafe.Pointer, are
-// impossible to support given the "boxed" value representation we
-// have chosen.
-//
-// * The reflect package is only partially implemented.
-//
-// * The "testing" package is no longer supported because it
-// depends on low-level details that change too often.
-//
-// * "sync/atomic" operations are not atomic due to the "boxed" value
-// representation: it is not possible to read, modify and write an
-// interface value atomically. As a consequence, Mutexes are currently
-// broken.
-//
-// * recover is only partially implemented.  Also, the interpreter
-// makes no attempt to distinguish target panics from interpreter
-// crashes.
-//
-// * the sizes of the int, uint and uintptr types in the target
-// program are assumed to be the same as those of the interpreter
-// itself.
-//
-// * all values occupy space, even those of types defined by the spec
-// to have zero size, e.g. struct{}.  This can cause asymptotic
-// performance degradation.
-//
-// * os.Exit is implemented using panic, causing deferred functions to
-// run.
-package interp // import "golang.org/x/tools/go/ssa/interp"
+package interp
 
 import (
 	"fmt"

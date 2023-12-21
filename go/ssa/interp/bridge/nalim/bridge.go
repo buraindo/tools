@@ -16,6 +16,10 @@ import (
 	"golang.org/x/tools/go/ssa/interp/bridge/common"
 )
 
+const (
+	bufSize = 1 << 8
+)
+
 // ---------------- region: initialize
 
 //export initialize
@@ -356,10 +360,10 @@ func methodInfo(pointer C.jlong, arr *C.jint) {
 
 // ---------------- region: api
 
-type Method int64
+type Method byte
 
 const (
-	MethodUnknown Method = iota
+	_ Method = iota
 	MethodMkRegisterReading
 	MethodMkBinOp
 	MethodMkIf
@@ -367,10 +371,10 @@ const (
 	MethodMkVariable
 )
 
-type BinOp int64
+type BinOp byte
 
 const (
-	BinOpIllegal BinOp = iota
+	_ BinOp = iota
 
 	BinOpEq
 	BinOpNeq
@@ -400,7 +404,7 @@ var binOpMapping = map[token.Token]BinOp{
 	token.REM: BinOpMod,
 }
 
-type VarKind int64
+type VarKind byte
 
 const (
 	VarKindIllegal VarKind = iota
@@ -411,11 +415,12 @@ const (
 
 type NalimApi struct {
 	lastBlock int
-	args      []int64
+	buf       *common.ByteBuffer
 }
 
 func (a *NalimApi) MkIntRegisterReading(_ string, idx int) {
-	a.args = append(a.args, int64(MethodMkRegisterReading), int64(idx))
+	a.buf.Write(byte(MethodMkRegisterReading))
+	a.buf.WriteInt(idx)
 }
 
 func (a *NalimApi) MkBinOp(inst *ssa.BinOp) {
@@ -424,7 +429,13 @@ func (a *NalimApi) MkBinOp(inst *ssa.BinOp) {
 	sndT, snd := resolveVar(inst.Y)
 	t := binOpMapping[inst.Op]
 
-	a.args = append(a.args, int64(MethodMkBinOp), int64(t), name, int64(fstT), fst, int64(sndT), snd)
+	a.buf.Write(byte(MethodMkBinOp))
+	a.buf.Write(byte(t))
+	a.buf.WriteInt(name)
+	a.buf.Write(byte(fstT))
+	a.buf.WriteInt(fst)
+	a.buf.Write(byte(sndT))
+	a.buf.WriteInt(snd)
 }
 
 func (a *NalimApi) MkIf(expr string, pos, neg *ssa.Instruction) {
@@ -432,20 +443,28 @@ func (a *NalimApi) MkIf(expr string, pos, neg *ssa.Instruction) {
 	posC := int64(common.ToPointer(pos))
 	negC := int64(common.ToPointer(neg))
 
-	a.args = append(a.args, int64(MethodMkIf), exprC, posC, negC)
+	a.buf.Write(byte(MethodMkIf))
+	a.buf.WriteInt(exprC)
+	a.buf.WriteLong(posC)
+	a.buf.WriteLong(negC)
 }
 
 func (a *NalimApi) MkReturn(value ssa.Value) {
-	nameT, name := resolveVar(value)
+	varT, varValue := resolveVar(value)
 
-	a.args = append(a.args, int64(MethodMkReturn), int64(nameT), name)
+	a.buf.Write(byte(MethodMkReturn))
+	a.buf.Write(byte(varT))
+	a.buf.WriteInt(varValue)
 }
 
 func (a *NalimApi) MkVariable(name string, value ssa.Value) {
 	nameI := resolveRegister(name)
-	valueT, valueName := resolveVar(value)
+	varT, varValue := resolveVar(value)
 
-	a.args = append(a.args, int64(MethodMkVariable), nameI, int64(valueT), valueName)
+	a.buf.Write(byte(MethodMkVariable))
+	a.buf.WriteInt(nameI)
+	a.buf.Write(byte(varT))
+	a.buf.WriteInt(varValue)
 }
 
 func (a *NalimApi) GetLastBlock() int {
@@ -466,23 +485,17 @@ func start() C.int {
 }
 
 //export step
-func step(pointer C.jlong, lastBlock C.jint, arr *C.jlong) C.jlong {
+func step(pointer C.jlong, lastBlock C.jint, arr *C.jbyte) C.jlong {
 	inst := *common.FromPointer[ssa.Instruction](uintptr(pointer))
 	if inst == nil {
 		return 0
 	}
 
-	api := &NalimApi{lastBlock: int(lastBlock), args: make([]int64, 0, 20)}
-	nextInst := common.Bridge.Interpreter.Step(api, inst)
+	out := (*[bufSize]byte)(unsafe.Pointer(arr))[:]
+	api := &NalimApi{lastBlock: int(lastBlock), buf: common.NewByteBuffer(out)}
 
-	if len(api.args) == 0 {
-		api.args = append(api.args, -1)
-	}
-	api.args = append(api.args, int64(api.lastBlock))
-	out := unsafe.Slice(arr, len(api.args))
-	for i := range api.args {
-		out[i] = C.jlong(api.args[i])
-	}
+	nextInst := common.Bridge.Interpreter.Step(api, inst)
+	api.buf.WriteInt(api.lastBlock)
 
 	if nextInst == nil {
 		return 0
@@ -509,27 +522,27 @@ func toJBool(b bool) C.jboolean {
 	return C.JNI_FALSE
 }
 
-func resolveVar(in ssa.Value) (VarKind, int64) {
+func resolveVar(in ssa.Value) (VarKind, int) {
 	switch in := in.(type) {
 	case *ssa.Parameter:
 		f := in.Parent()
 		for i, p := range f.Params {
 			if p == in {
-				return VarKindParameter, int64(i)
+				return VarKindParameter, i
 			}
 		}
 	case *ssa.Const:
-		return VarKindConst, in.Int64()
+		return VarKindConst, int(in.Int64())
 	default:
-		i, _ := strconv.ParseInt(in.Name()[1:], 10, 64)
-		return VarKindLocal, i
+		i, _ := strconv.ParseInt(in.Name()[1:], 10, 32)
+		return VarKindLocal, int(i)
 	}
 	return VarKindIllegal, -1
 }
 
-func resolveRegister(in string) int64 {
-	name, _ := strconv.ParseInt(in[1:], 10, 64)
-	return name
+func resolveRegister(in string) int {
+	name, _ := strconv.ParseInt(in[1:], 10, 32)
+	return int(name)
 }
 
 // ---------------- region: tools
